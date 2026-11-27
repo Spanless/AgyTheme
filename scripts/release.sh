@@ -3,6 +3,7 @@ set -eu
 
 TARGETS="darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64 windows/arm64"
 MODULE="github.com/Spanless/AgyTheme"
+EXPECTED_REPO="Spanless/AgyTheme"
 SLUG="agy-theme"
 PRODUCT="AgyTheme"
 
@@ -35,6 +36,89 @@ abs_dir() {
   esac
 }
 
+# Returns 1 if a > b, 0 if a == b, -1 if a < b (SemVer 2.0.0 with prerelease precedence).
+semver_cmp() {
+  awk -v a="$1" -v b="$2" '
+    function cmp_num(x, y) { return (x + 0 > y + 0) ? 1 : ((x + 0 < y + 0) ? -1 : 0) }
+    function is_num(s) { return s ~ /^[0-9]+$/ }
+    BEGIN {
+      ap = ""; bp = ""
+      if (index(a, "-") > 0) { ap = substr(a, index(a, "-") + 1); a = substr(a, 1, index(a, "-") - 1) }
+      if (index(b, "-") > 0) { bp = substr(b, index(b, "-") + 1); b = substr(b, 1, index(b, "-") - 1) }
+      split(a, av, "."); split(b, bv, ".")
+      for (i = 1; i <= 3; i++) {
+        c = cmp_num(av[i], bv[i])
+        if (c != 0) { print c; exit }
+      }
+      if (ap == "" && bp == "") { print 0; exit }
+      if (ap == "") { print 1; exit }
+      if (bp == "") { print -1; exit }
+      na = split(ap, api, "."); nb = split(bp, bpi, ".")
+      n = (na < nb) ? na : nb
+      for (i = 1; i <= n; i++) {
+        if (api[i] == bpi[i]) continue
+        if (is_num(api[i]) && is_num(bpi[i])) { print cmp_num(api[i], bpi[i]); exit }
+        if (is_num(api[i])) { print -1; exit }
+        if (is_num(bpi[i])) { print 1; exit }
+        print (api[i] > bpi[i]) ? 1 : -1; exit
+      }
+      print (na > nb) ? 1 : ((na < nb) ? -1 : 0)
+    }
+  '
+}
+
+latest_semver_tag() {
+  best=""
+  for t in $(git tag -l 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' || true); do
+    if [ -z "$best" ]; then
+      best="$t"
+    elif [ "$(semver_cmp "${t#v}" "${best#v}")" -gt 0 ]; then
+      best="$t"
+    fi
+  done
+  printf '%s' "$best"
+}
+
+check_git_clean() {
+  git_dir="$(git rev-parse --git-dir)"
+  for marker in MERGE_HEAD REBASE_HEAD CHERRY_PICK_HEAD BISECT_LOG rebase-merge rebase-apply; do
+    [ ! -e "$git_dir/$marker" ] || fail "git operation in progress ($marker); finish or abort it before releasing"
+  done
+  dirty="$(git status --porcelain --untracked-files=all)"
+  if [ -n "$dirty" ]; then
+    echo "$dirty" >&2
+    fail "working tree is not clean; commit or remove all changes and untracked files before releasing"
+  fi
+  tracked_secrets="$(git ls-files | grep -E '(^|/)\.env($|\.)|(^|/)\.dev/|\.(pfx|p12|pem|key)$' | grep -Ev '(^|/)\.env\.(example|sample|template)$' || true)"
+  if [ -n "$tracked_secrets" ]; then
+    echo "$tracked_secrets" >&2
+    fail "refusing to release while sensitive or local dev files are tracked by git"
+  fi
+}
+
+check_version_progression() {
+  latest_tag="$(latest_semver_tag)"
+  if [ -z "$latest_tag" ]; then
+    echo "[release] initial release detected ($tag)"
+    return 0
+  fi
+  latest_ver="${latest_tag#v}"
+  cmp="$(semver_cmp "$version" "$latest_ver")"
+  if [ "$cmp" -le 0 ]; then
+    fail "version $version must be strictly greater than latest released tag $latest_tag (bump version first)"
+  fi
+  commits_since="$(git rev-list --count "$latest_tag..HEAD")"
+  if [ "$commits_since" -le 0 ]; then
+    fail "HEAD has no new commits since $latest_tag; refusing to publish an identical release"
+  fi
+  prev_assets_ver="$(git show "$latest_tag:assets.go" 2>/dev/null | sed -n 's/^var Version = "\(.*\)"$/\1/p' || true)"
+  prev_pkg_ver="$(git show "$latest_tag:package.json" 2>/dev/null | sed -n 's/^  "version": "\(.*\)",$/\1/p' || true)"
+  if [ "$prev_assets_ver" = "$version" ] || [ "$prev_pkg_ver" = "$version" ]; then
+    fail "version $version was not updated compared to $latest_tag"
+  fi
+  echo "[release] version progression ok: $latest_tag -> $tag ($commits_since commits)"
+}
+
 sign_windows() {
   sign_tmp="$(mktemp -d)"
   chmod 700 "$sign_tmp"
@@ -60,20 +144,27 @@ sign_windows() {
 tag=""
 dry_run=0
 skip_tests=0
+allow_dirty=0
 for arg in "$@"; do
   case "$arg" in
     --dry-run) dry_run=1 ;;
     --skip-tests) skip_tests=1 ;;
+    --allow-dirty) allow_dirty=1 ;;
     -*) fail "unknown option $arg" ;;
     *) [ -z "$tag" ] || fail "only one tag may be given"; tag="$arg" ;;
   esac
 done
-[ -n "$tag" ] || fail "usage: scripts/release.sh vX.Y.Z [--dry-run] [--skip-tests]"
+[ -n "$tag" ] || fail "usage: scripts/release.sh vX.Y.Z [--dry-run] [--skip-tests] [--allow-dirty]"
 echo "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' || fail "tag must look like v1.2.3 (got $tag)"
 version="${tag#v}"
 
+if [ "$dry_run" = 0 ]; then
+  [ "$skip_tests" = 0 ] || fail "--skip-tests is only allowed with --dry-run"
+  [ "$allow_dirty" = 0 ] || fail "--allow-dirty is only allowed with --dry-run"
+fi
+
 cd "$(dirname "$0")/.."
-for tool in go git zip; do
+for tool in go git zip unzip awk; do
   command -v "$tool" >/dev/null 2>&1 || fail "$tool is required"
 done
 
@@ -92,11 +183,18 @@ out="$cache_root/workspaces/$SLUG/staging/$checkout/$tag"
 bins="$out/bin"
 archive="$artifact_root/$SLUG/$version"
 
+# 1. Working tree & tracked-file hygiene
+if [ "$allow_dirty" = 0 ]; then
+  check_git_clean
+fi
+
+# 2. Version metadata consistency across files
 src_version="$(sed -n 's/^var Version = "\(.*\)"$/\1/p' assets.go)"
 pkg_version="$(sed -n 's/^  "version": "\(.*\)",$/\1/p' package.json)"
 [ "$src_version" = "$version" ] || fail "assets.go has Version = \"$src_version\"; bump it to \"$version\" and commit first"
 [ "$pkg_version" = "$version" ] || fail "package.json has version \"$pkg_version\"; bump it to \"$version\" and commit first"
 
+# 3. Signing credentials check
 sign_pfx_b64="$(env_value WINDOWS_SIGN_PFX_BASE64)"
 sign_pfx_pass="$(env_value WINDOWS_SIGN_PFX_PASSWORD)"
 sign_ts_url="$(env_value WINDOWS_SIGN_TIMESTAMP_URL)"
@@ -113,20 +211,31 @@ else
   echo "[release] no Windows signing certificate in .env; the dry run leaves the .exe files unsigned"
 fi
 
+# 4. Remote, branch, tag & version progression guards
 if [ "$dry_run" = 0 ]; then
   command -v gh >/dev/null 2>&1 || fail "gh is required to publish"
   gh auth token -h github.com >/dev/null 2>&1 || fail "gh is not logged in (run: gh auth login)"
-  [ -z "$(git status --porcelain)" ] || fail "working tree is not clean"
-  [ "$(git rev-parse --abbrev-ref HEAD)" = main ] || fail "release from the main branch"
+  origin_url="$(git remote get-url origin 2>/dev/null || true)"
+  case "$origin_url" in
+    *"$EXPECTED_REPO"* ) ;;
+    *) fail "origin remote \"$origin_url\" does not match expected repo $EXPECTED_REPO" ;;
+  esac
+  [ "$(git rev-parse --abbrev-ref HEAD)" = main ] || fail "release from the main branch (current: $(git rev-parse --abbrev-ref HEAD))"
   git fetch -q origin main --tags
-  [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] || fail "HEAD is not origin/main; push or pull first"
+  [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] || fail "HEAD is not aligned with origin/main; push or pull first"
+  if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+    fail "local tag $tag already exists; bump to a new version"
+  fi
+  if [ -n "$(git ls-remote --tags origin "refs/tags/$tag")" ]; then
+    fail "remote tag $tag already exists on origin; bump to a new version"
+  fi
   if gh release view "$tag" >/dev/null 2>&1; then
-    fail "release $tag already exists"
+    fail "GitHub release $tag already exists; bump to a new version"
   fi
   [ ! -e "$archive" ] || fail "$archive already exists; a published version is never overwritten"
-  if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
-    [ "$(git rev-parse "$tag^{commit}")" = "$(git rev-parse HEAD)" ] || fail "tag $tag exists but does not point at HEAD"
-  fi
+  check_version_progression
+else
+  check_version_progression
 fi
 
 if [ "$skip_tests" = 0 ]; then
@@ -169,8 +278,15 @@ pack_plugin() {
   for os in "$@"; do
     cp "$bins"/agytheme-"$os"-* "$plugin_stage/pack/agytheme/bin/"
   done
+  find "$plugin_stage/pack" -name '.DS_Store' -delete
   chmod 755 "$plugin_stage"/pack/agytheme/bin/*
-  (cd "$plugin_stage/pack" && zip -qrX "$out/${zip_name}" agytheme)
+  (cd "$plugin_stage/pack" && zip -qrX "$out/${zip_name}" agytheme -x '*.DS_Store' '*/.DS_Store')
+  zip_listing="$(unzip -Z1 "$out/${zip_name}")"
+  echo "$zip_listing" | grep -qx 'agytheme/SKILL.md' || fail "${zip_name} is missing agytheme/SKILL.md"
+  echo "$zip_listing" | grep -q '^agytheme/bin/agytheme-' || fail "${zip_name} is missing platform binaries"
+  if echo "$zip_listing" | grep -q '\.DS_Store'; then
+    fail "${zip_name} contains .DS_Store"
+  fi
   echo "  ${zip_name} ($(du -h "$out/${zip_name}" | awk '{ print $1 }'))"
 }
 
@@ -186,6 +302,7 @@ sha256() {
   if command -v sha256sum >/dev/null 2>&1; then sha256sum "$@"; else shasum -a 256 "$@"; fi
 }
 (cd "$out" && sha256 "${PRODUCT}-${version}"-*.zip > SHA256SUMS)
+[ -s "$out/SHA256SUMS" ] || fail "SHA256SUMS is empty"
 
 host="$bins/agytheme-$(go env GOOS)-$(go env GOARCH)"
 [ "$(go env GOOS)" = windows ] && host="${host}.exe"
@@ -210,11 +327,14 @@ if [ "$dry_run" = 1 ]; then
   exit 0
 fi
 
-if ! git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
-  git tag -a "$tag" -m "AgyTheme $tag"
-fi
+git tag -a "$tag" -m "AgyTheme $tag"
 git push -q origin "refs/tags/$tag"
-gh release create "$tag" "$out/${PRODUCT}-${version}"-*.zip "$out/SHA256SUMS" --verify-tag --generate-notes --title "$tag"
+prerelease_flag=""
+case "$version" in
+  *-*) prerelease_flag="--prerelease" ;;
+esac
+# shellcheck disable=SC2086
+gh release create "$tag" "$out/${PRODUCT}-${version}"-*.zip "$out/SHA256SUMS" --verify-tag --generate-notes --title "$tag" $prerelease_flag
 echo "[release] published $(gh release view "$tag" --json url --jq .url)"
 
 archive_stage="$artifact_root/$SLUG/.staging-$version-$$"
