@@ -154,9 +154,27 @@
     const RE_UPDATES_COUNT = /^(\d+)\s+updates?$/i;
     const RE_PROJECTS_COUNT = /^(\d+)\s+projects?$/i;
     const RE_CALLS_MB = /^(\d+)\s+calls?\s*·\s*([\d.]+\s*MB)$/i;
+    const RE_WAITING_ON_YOU = /^(\d+)\s+waiting\s+on\s+you$/i;
+    const RE_HIDDEN_HOSTS = /^(\d+)\s+hidden\s+hosts?$/i;
+    const RE_COMMENTS_COUNT = /^(\d+)\s+comments?$/i;
+    const RE_DRAFTS_COUNT = /^(\d+)\s+drafts?$/i;
+    const RE_LINES_ABOVE_HIDDEN = /^(\d+)\s+lines?\s+above\s+hidden$/i;
     const RE_SEE_ALL = /^See all\s*\((\d+)\)$/i;
+    const RE_SEND_ALL = /^Send all\s*\((\d+)\)$/i;
     const RE_SHOW_BREAKDOWNS = /^Show\s+(\d+)\s+breakdowns?$/i;
     const RE_SHOW_MORE_SUBAGENTS = /^Show\s+(\d+)\s+more\s+subagents?$/i;
+    const RE_SHOW_EARLIER_STEPS = /^Show\s+(\d+)\s+earlier\s+steps?$/i;
+    const RE_SHOW_SUBMITTED = /^Show submitted\s*\((\d+)\)$/i;
+    const RE_SHOW_MORE_PAREN = /^Show more\s*\((\d+)\)$/i;
+    const RE_START_BEST_OF = /^Start Best-of-(\d+)$/i;
+    const RE_STOP_N_SELECTED = /^Stop\s+(\d+)\s+selected$/i;
+    const RE_GENERATION_STEPS = /^Generation Steps\s*\((\d+)\)$/i;
+    const RE_EXPORTING_PCT = /^Exporting\s+(\d+)%$/i;
+    const RE_PREVIEW_UNAVAILABLE_REASON = /^Preview unavailable\s*[—–-]\s*(.+)$/;
+    const RE_QUESTION_OF = /^Question\s+(\d+)\s+of\s+(\d+)$/i;
+    const RE_LOW_CONTRAST = /^Low contrast ratio\s*\(([\d.]+:1)\)\.\s*Text may be hard to read\.$/i;
+    const RE_RUNS_ON = /^Runs on\s+(.+)$/;
+    const RE_SIGNING_IN_ON = /^You're signing in on\s+(.+?)\.\s*Your sign-in stays on that machine\.$/;
     const RE_ZIPPING_FOLDER = /^Zipping\s+(.+?)(?:…|\.\.\.)$/i;
     const RE_PERM_DELETE = /^Permanently delete\s+(.*)\s+including\s+(\d+)\s+active\s+conversations\.?$/i;
     const RE_WORKED_FOR_UPDATES = /^Worked for\s+([<0-9smhd\s]+?)\s*·\s*(\d+)\s+updates?$/i;
@@ -253,6 +271,27 @@
     const RE_EXITED_CODE_ONLY = /^Exited with code\s+(-?\d+)(\.)?$/i;
     const RE_SUMMARY_EXITED_CODE = /^([^\r\n]{1,220}?)\s*·\s*Exited with code\s+(-?\d+)$/;
     const RE_STARTED_SIDE_QUOTE = /^Started\s+(from|during)\s+[“"](.+)[”"]$/;
+    const RE_ARIA_PLAYBACK_SPEED = /^Playback speed\s+([\d.]+x)$/i;
+    const RE_ARIA_ZOOM_RESET = /^Zoom\s+(\d+)%,\s*reset to fit$/i;
+    const RE_ARIA_PLAN_STEPS = /^Plan,\s*(\d+)\s+of\s+(\d+)\s+steps?\s+done$/i;
+    const RE_ARIA_GO_TO_TURN = /^Go to turn\s+(\d+)\s+of\s+(\d+)$/i;
+    const RE_ARIA_OPEN_SUBAGENT = /^Open Subagent:\s*(.+)$/i;
+    const RE_ARIA_VIEW_DIFF_FOR = /^View Diff for\s+(.+)$/i;
+    const RE_ARIA_DELETE_COOKIES_FOR = /^Delete cookies for\s+(.+)$/i;
+    const RE_ARIA_REVOKE = /^Revoke(?: (all))?:\s*(.+)$/i;
+    const RE_ARIA_MORE_ACTIONS_FOR = /^More (actions|options) for\s+(.+)$/i;
+    const RE_ARIA_RESET_DEFAULT = /^Reset\s+(.+?)\s+to default$/i;
+    const RE_ARIA_RECORDING_SHORTCUT =
+      /^Recording shortcut for\s+(.+?)\.\s*Press keys to bind,\s*Enter to save,\s*Escape to cancel\.$/;
+    const RE_ARIA_OPEN_URL_SYS = /^Open URL in system browser:\s*(.+)$/i;
+    const RE_ARIA_GO_TO_PAGE = /^Go to (page|slide)\s+(\d+)$/i;
+    const RE_ARIA_DELETE_SIDE_Q = /^Delete side question:\s*(.+)$/i;
+    const RE_ARIA_SWITCH_ENV = /^Switch environment\s*\((.+)\)$/i;
+    const RE_ARIA_DETAILS_FOR = /^Details for\s+(.+)$/i;
+    const RE_ARIA_SHOW_IN_FOLDER = /^Show\s+(.+?)\s+in folder$/i;
+    const RE_ARIA_DOWNLOAD_PROGRESS = /^(.+?)\s+download progress$/i;
+    const RE_ARIA_REMOVE_FROM_LIST = /^Remove\s+(.+?)\s+from list$/i;
+    const RE_ARIA_GO_TO_BOARD_SEQ = /^Go to #(\d+) on the Board$/i;
 
     function formatCompactDurationZh(str) {
       const s = String(str || '').trim();
@@ -436,15 +475,26 @@
         if (RE_ACTIVE_CONVS.test(trimmed)) return raw.replace(RE_ACTIVE_CONVS, '$1 个进行中的会话');
         if (RE_PROJECTS_COUNT.test(trimmed)) return raw.replace(RE_PROJECTS_COUNT, '$1 个项目');
         if (RE_CALLS_MB.test(trimmed)) return raw.replace(RE_CALLS_MB, '$1 次通话 · $2');
+        if (RE_WAITING_ON_YOU.test(trimmed)) return raw.replace(RE_WAITING_ON_YOU, '$1 项等待你处理');
+        if (RE_HIDDEN_HOSTS.test(trimmed)) return raw.replace(RE_HIDDEN_HOSTS, '$1 个隐藏主机');
+        if (RE_COMMENTS_COUNT.test(trimmed)) return raw.replace(RE_COMMENTS_COUNT, '$1 条评论');
+        if (RE_DRAFTS_COUNT.test(trimmed)) return raw.replace(RE_DRAFTS_COUNT, '$1 份草稿');
+        if (RE_LINES_ABOVE_HIDDEN.test(trimmed)) return raw.replace(RE_LINES_ABOVE_HIDDEN, '上方已隐藏 $1 行');
         return null;
       }
 
       const firstUpper = trimmed[0].toUpperCase();
       if (firstUpper === 'S') {
         if (RE_SEE_ALL.test(trimmed)) return raw.replace(RE_SEE_ALL, '查看全部 ($1)');
+        if (RE_SEND_ALL.test(trimmed)) return raw.replace(RE_SEND_ALL, '全部发送 ($1)');
         if (RE_SHOW_BREAKDOWNS.test(trimmed)) return raw.replace(RE_SHOW_BREAKDOWNS, '展开明细 ($1 项)');
         if (RE_SHOW_MORE_SUBAGENTS.test(trimmed)) return raw.replace(RE_SHOW_MORE_SUBAGENTS, '显示另外 $1 个子代理');
+        if (RE_SHOW_EARLIER_STEPS.test(trimmed)) return raw.replace(RE_SHOW_EARLIER_STEPS, '展开 $1 个更早步骤');
+        if (RE_SHOW_SUBMITTED.test(trimmed)) return raw.replace(RE_SHOW_SUBMITTED, '显示已提交 ($1)');
+        if (RE_SHOW_MORE_PAREN.test(trimmed)) return raw.replace(RE_SHOW_MORE_PAREN, '显示更多 ($1)');
         if (RE_SHOW_N_MORE.test(trimmed)) return raw.replace(RE_SHOW_N_MORE, '再显示 $1 项...');
+        if (RE_START_BEST_OF.test(trimmed)) return raw.replace(RE_START_BEST_OF, '开始 $1 选 1 (Best-of-$1)');
+        if (RE_STOP_N_SELECTED.test(trimmed)) return raw.replace(RE_STOP_N_SELECTED, '停止所选 $1 项');
         const mFeedbackAs = trimmed.match(RE_SEND_FEEDBACK_AS);
         if (mFeedbackAs) return raw.replace(trimmed, () => '以 ' + mFeedbackAs[1] + ' 的身份发送反馈');
         if (RE_SEARCH_GOOGLE.test(trimmed)) return raw.replace(RE_SEARCH_GOOGLE, (_, q) => '使用 Google 搜索“' + q + '”');
@@ -460,6 +510,14 @@
         if (RE_PERM_DELETE.test(trimmed)) {
           return raw.replace(RE_PERM_DELETE, (_, target, cnt) => '永久删除 ' + target + ' 及 ' + cnt + ' 个进行中的会话。');
         }
+        const mPrevUnavail = trimmed.match(RE_PREVIEW_UNAVAILABLE_REASON);
+        if (mPrevUnavail) {
+          return raw.replace(trimmed, () => '无法预览 — ' + mPrevUnavail[1].trim());
+        }
+      } else if (firstUpper === 'G') {
+        if (RE_GENERATION_STEPS.test(trimmed)) return raw.replace(RE_GENERATION_STEPS, '生成步骤 ($1)');
+      } else if (firstUpper === 'Q') {
+        if (RE_QUESTION_OF.test(trimmed)) return raw.replace(RE_QUESTION_OF, '第 $1 / $2 个问题');
       } else if (firstUpper === 'W' || firstUpper === 'M') {
         const mNamed = trimmed.match(RE_NAMED_LIMIT_RESETS);
         if (mNamed) {
@@ -481,10 +539,20 @@
           );
         }
       } else if (firstUpper === 'E' || firstUpper === 'R' || firstUpper === 'L') {
+        if (firstUpper === 'E' && RE_EXPORTING_PCT.test(trimmed)) {
+          return raw.replace(RE_EXPORTING_PCT, '正在导出 $1%');
+        }
+        if (firstUpper === 'L' && RE_LOW_CONTRAST.test(trimmed)) {
+          return raw.replace(RE_LOW_CONTRAST, '对比度较低（$1），文字可能难以阅读。');
+        }
         if (firstUpper === 'R') {
           const mResets = trimmed.match(RE_RESETS_IN);
           if (mResets) {
             return raw.replace(trimmed, () => formatCompactDurationZh(mResets[1]) + '后重置');
+          }
+          const mRunsOn = trimmed.match(RE_RUNS_ON);
+          if (mRunsOn) {
+            return raw.replace(trimmed, () => '运行于 ' + mRunsOn[1].trim());
           }
         }
         if (RE_EPHEMERAL_SUMMARY.test(trimmed)) {
@@ -533,6 +601,10 @@
         const mPlan = trimmed.match(RE_YOUR_PLAN);
         if (mPlan) {
           return raw.replace(trimmed, () => '当前套餐：' + mPlan[1].trim());
+        }
+        const mSignInOn = trimmed.match(RE_SIGNING_IN_ON);
+        if (mSignInOn) {
+          return raw.replace(trimmed, () => '你正在 ' + mSignInOn[1].trim() + ' 上登录，登录状态仅保留在该设备上。');
         }
         const mUsed = trimmed.match(RE_USED_LIMIT);
         if (mUsed) {
@@ -778,6 +850,46 @@
       if (mVer) {
         return '版本 ' + mVer[1].trim();
       }
+      const mPlayback = atrim.match(RE_ARIA_PLAYBACK_SPEED);
+      if (mPlayback) return '播放速度 ' + mPlayback[1];
+      const mZoomReset = atrim.match(RE_ARIA_ZOOM_RESET);
+      if (mZoomReset) return '缩放 ' + mZoomReset[1] + '%，点击重置为适应窗口';
+      const mPlanSteps = atrim.match(RE_ARIA_PLAN_STEPS);
+      if (mPlanSteps) return '计划，已完成 ' + mPlanSteps[1] + ' / ' + mPlanSteps[2] + ' 步';
+      const mGoTurn = atrim.match(RE_ARIA_GO_TO_TURN);
+      if (mGoTurn) return '跳转到第 ' + mGoTurn[1] + ' / ' + mGoTurn[2] + ' 轮对话';
+      const mOpenSub = atrim.match(RE_ARIA_OPEN_SUBAGENT);
+      if (mOpenSub) return '打开子代理：' + mOpenSub[1].trim();
+      const mViewDiff = atrim.match(RE_ARIA_VIEW_DIFF_FOR);
+      if (mViewDiff) return '查看 ' + mViewDiff[1].trim() + ' 的差异';
+      const mDelCookies = atrim.match(RE_ARIA_DELETE_COOKIES_FOR);
+      if (mDelCookies) return '删除 ' + mDelCookies[1].trim() + ' 的 Cookie';
+      const mRevoke = atrim.match(RE_ARIA_REVOKE);
+      if (mRevoke) return (mRevoke[1] ? '全部撤销：' : '撤销：') + mRevoke[2].trim();
+      const mMoreAct = atrim.match(RE_ARIA_MORE_ACTIONS_FOR);
+      if (mMoreAct) return mMoreAct[2].trim() + (mMoreAct[1].toLowerCase() === 'options' ? ' 的更多选项' : ' 的更多操作');
+      const mResetDef = atrim.match(RE_ARIA_RESET_DEFAULT);
+      if (mResetDef) return '将“' + actionZh(mResetDef[1]) + '”重置为默认';
+      const mRecShortcut = atrim.match(RE_ARIA_RECORDING_SHORTCUT);
+      if (mRecShortcut) return '正在录制“' + actionZh(mRecShortcut[1]) + '”的快捷键。按下按键绑定，Enter 保存，Esc 取消。';
+      const mOpenUrlSys = atrim.match(RE_ARIA_OPEN_URL_SYS);
+      if (mOpenUrlSys) return '在系统浏览器中打开链接：' + mOpenUrlSys[1].trim();
+      const mGoPage = atrim.match(RE_ARIA_GO_TO_PAGE);
+      if (mGoPage) return mGoPage[1].toLowerCase() === 'slide' ? '跳转到第 ' + mGoPage[2] + ' 张幻灯片' : '跳转到第 ' + mGoPage[2] + ' 页';
+      const mDelSideQ = atrim.match(RE_ARIA_DELETE_SIDE_Q);
+      if (mDelSideQ) return '删除旁路提问：' + mDelSideQ[1].trim();
+      const mSwitchEnv = atrim.match(RE_ARIA_SWITCH_ENV);
+      if (mSwitchEnv) return '切换环境 (' + mSwitchEnv[1].trim() + ')';
+      const mDetailsFor = atrim.match(RE_ARIA_DETAILS_FOR);
+      if (mDetailsFor) return mDetailsFor[1].trim() + ' 详情';
+      const mShowInFolder = atrim.match(RE_ARIA_SHOW_IN_FOLDER);
+      if (mShowInFolder) return '在文件夹中显示 ' + mShowInFolder[1].trim();
+      const mDlProg = atrim.match(RE_ARIA_DOWNLOAD_PROGRESS);
+      if (mDlProg) return mDlProg[1].trim() + ' 下载进度';
+      const mRmList = atrim.match(RE_ARIA_REMOVE_FROM_LIST);
+      if (mRmList) return '从列表中移除 ' + mRmList[1].trim();
+      const mBoardSeq = atrim.match(RE_ARIA_GO_TO_BOARD_SEQ);
+      if (mBoardSeq) return '前往看板第 #' + mBoardSeq[1] + ' 条消息';
       return computeTextTranslation(atrim, el);
     }
 

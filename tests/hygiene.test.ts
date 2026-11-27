@@ -20,6 +20,11 @@ test('core/i18n.json is valid JSON with substantial coverage and leaves model/ef
   for (const keepEn of ['Minimal', 'Low', 'Medium', 'High', 'Extra', 'Extra High', 'XHigh', 'Max', 'Orchestrator', 'Orchestrator (Carbon)', 'Orchestrator (Argon)']) {
     expect(Object.hasOwn(dict, keepEn)).toBe(false);
   }
+  expect(dict['Enable Sandbox Mode']).toBe(dict['Enable sandbox mode']);
+  expect(dict['Commands Outside Sandbox']).toBe(dict['Commands outside sandbox']);
+  expect(typeof dict['Thinking effort']).toBe('string');
+  expect(typeof dict['Inbox Mode']).toBe('string');
+  expect(typeof dict['Export GIF']).toBe('string');
 });
 
 test('README keeps canonical repository links and clean copy', () => {
