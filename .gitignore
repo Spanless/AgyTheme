@@ -1,0 +1,15 @@
+# Personal dev environment (scratch scripts, logs, local tools)
+.dev/
+node_modules/
+.DS_Store
+
+# `go build ./cmd/agytheme` run from the repo root; release builds go to ~/develop/cache
+/agytheme
+/agytheme.exe
+
+# Local release secrets (Windows code-signing certificate)
+.env
+.env.*
+!.env.example
+*.pfx
+*.p12

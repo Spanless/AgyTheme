@@ -1,0 +1,19 @@
+{
+  "enabled": true,
+  "channel": "auto",
+  "preset": "light",
+  "telemetryLayout": "compact",
+  "telemetryCacheMode": "session",
+  "contextLimit": "auto",
+  "modules": {
+    "theme": true,
+    "i18n": true,
+    "metrics": true,
+    "deadlockHealer": true,
+    "zoomShortcuts": true,
+    "cdpAutoRelaunch": true,
+    "customCss": true,
+    "customJs": true
+  },
+  "themeVars": {}
+}

@@ -1,0 +1,16 @@
+{
+  "name": "agytheme",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Front-end runtime tests for AgyTheme",
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit -p tests"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.5",
+    "typescript": "7.0.2"
+  }
+}
