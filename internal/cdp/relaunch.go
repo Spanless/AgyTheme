@@ -17,7 +17,7 @@ import (
 	"github.com/Spanless/AgyTheme/internal/shared"
 )
 
-var RelaunchGuardFile = filepath.Join(os.TempDir(), "agytheme-cdp-relaunch-guard.json")
+var RelaunchGuardFile = filepath.Join(shared.RuntimeDir(), "agytheme-cdp-relaunch-guard.json")
 
 type HostProc struct {
 	Pid            int     `json:"pid"`
@@ -331,7 +331,10 @@ func WritePendingActivation(path, reason string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, append(data, '\n'), 0o644)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(data, '\n'), 0o600)
 }
 
 func ReadPendingActivation(path string, now time.Time) (PendingActivation, bool) {
@@ -589,7 +592,8 @@ func (r *RelaunchController) relaunchProc(proc HostProc, reason string, guard Re
 	}
 	next.RecentRelaunchesMs = append(next.RecentRelaunchesMs, nowMs)
 	if data, err := json.MarshalIndent(next, "", "  "); err == nil {
-		_ = os.WriteFile(RelaunchGuardFile, append(data, '\n'), 0o644)
+		_ = os.MkdirAll(filepath.Dir(RelaunchGuardFile), 0o700)
+		_ = os.WriteFile(RelaunchGuardFile, append(data, '\n'), 0o600)
 	}
 	var err error
 	if r.Spawn != nil {

@@ -7,7 +7,9 @@ import (
 	"io"
 	"math"
 	"net"
+	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"strconv"
@@ -126,17 +128,79 @@ func parseLeadingInt(s string) (int, bool) {
 	return n, err == nil
 }
 
+func IsLoopbackHost(host string) bool {
+	h := strings.TrimSpace(strings.ToLower(host))
+	h = strings.Trim(h, "[]")
+	if h == "" {
+		return false
+	}
+	if h == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(h)
+	return ip != nil && ip.IsLoopback()
+}
+
+// RuntimeDir returns a per-user directory for PID and guard files rather than shared /tmp.
+func RuntimeDir() string {
+	if xdg := strings.TrimSpace(os.Getenv("XDG_RUNTIME_DIR")); xdg != "" {
+		return filepath.Join(xdg, "agytheme")
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		return filepath.Join(home, ".gemini", "antigravity", "agytheme", "run")
+	}
+	if uid := os.Getuid(); uid >= 0 {
+		return filepath.Join(os.TempDir(), fmt.Sprintf("agytheme-%d", uid))
+	}
+	return filepath.Join(os.TempDir(), "agytheme")
+}
+
 func IsAllowedOrigin(urlStr string, allowed []string) bool {
 	if urlStr == "" {
+		return false
+	}
+	u, err := url.Parse(urlStr)
+	if err != nil || u.Scheme == "" || u.User != nil {
 		return false
 	}
 	if allowed == nil {
 		allowed = DefaultAllowedOrigins
 	}
-	for _, prefix := range allowed {
-		if strings.HasPrefix(urlStr, prefix) {
-			return true
+	scheme := strings.ToLower(u.Scheme)
+	host := strings.ToLower(u.Hostname())
+	rawHost := strings.ToLower(u.Host)
+	for _, raw := range allowed {
+		rule := strings.TrimSpace(raw)
+		if rule == "" {
+			continue
 		}
+		if strings.HasSuffix(rule, "://") {
+			if scheme == strings.ToLower(strings.TrimSuffix(rule, "://")) {
+				return true
+			}
+			continue
+		}
+		if strings.HasPrefix(strings.ToLower(rule), "plugin://") && strings.HasSuffix(rule, "--") {
+			wantPrefix := strings.ToLower(strings.TrimPrefix(rule, "plugin://"))
+			if scheme == "plugin" && strings.HasPrefix(rawHost, wantPrefix) {
+				return true
+			}
+			continue
+		}
+		ru, err := url.Parse(rule)
+		if err != nil || ru.Scheme == "" || ru.Host == "" || ru.User != nil {
+			continue
+		}
+		if scheme != strings.ToLower(ru.Scheme) || host != strings.ToLower(ru.Hostname()) {
+			continue
+		}
+		if ru.Port() != "" && u.Port() != ru.Port() {
+			continue
+		}
+		if ru.Path != "" && ru.Path != "/" && !strings.HasPrefix(u.Path, ru.Path) {
+			continue
+		}
+		return true
 	}
 	return false
 }
@@ -222,8 +286,12 @@ func localHTTPGet(port int, path string, timeout time.Duration) ([]byte, error) 
 			}
 		}
 	}
+	const maxLocalHTTPBytes = 16 << 20
 	if length < 0 {
-		return io.ReadAll(io.LimitReader(br, 16<<20))
+		return io.ReadAll(io.LimitReader(br, maxLocalHTTPBytes))
+	}
+	if length > maxLocalHTTPBytes {
+		return nil, fmt.Errorf("GET %s: response too large (%d bytes)", path, length)
 	}
 	body := make([]byte, length)
 	_, err = io.ReadFull(br, body)

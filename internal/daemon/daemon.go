@@ -28,7 +28,7 @@ func PidFile(channel string) string {
 	if channel == "" {
 		channel = "default"
 	}
-	return filepath.Join(os.TempDir(), "agytheme-daemon-"+channel+".pid")
+	return filepath.Join(shared.RuntimeDir(), "agytheme-daemon-"+channel+".pid")
 }
 
 func AcquirePidLock(channel string) func() {
@@ -37,7 +37,8 @@ func AcquirePidLock(channel string) func() {
 		shared.IsConfirmedDaemonPid(old) {
 		_ = shared.TerminatePid(old)
 	}
-	_ = os.WriteFile(pidFile, []byte(strconv.Itoa(os.Getpid())), 0o644)
+	_ = os.MkdirAll(filepath.Dir(pidFile), 0o700)
+	_ = os.WriteFile(pidFile, []byte(strconv.Itoa(os.Getpid())), 0o600)
 	return func() {
 		raw, err := os.ReadFile(pidFile)
 		if err == nil && strings.TrimSpace(string(raw)) == strconv.Itoa(os.Getpid()) {
@@ -76,7 +77,7 @@ func TrimLogFileIfOversized(path string, maxBytes, keepBytes int64) bool {
 		tail = buf[nl+1:]
 	}
 	header := fmt.Sprintf("[Daemon] Log trimmed at %s (kept %dB)\n", time.Now().UTC().Format("2006-01-02T15:04:05.000Z"), len(tail))
-	return os.WriteFile(path, append([]byte(header), tail...), 0o644) == nil
+	return os.WriteFile(path, append([]byte(header), tail...), 0o600) == nil
 }
 
 // Antigravity never rotates captured sidecar stdout, so logs are redirected here for trimming.
@@ -85,10 +86,10 @@ func SidecarLogFile(rootDir string) string {
 }
 
 func redirectSidecarOutput(path string) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return
 	}
@@ -129,7 +130,8 @@ func WaitForPidLock(channel string, stop <-chan os.Signal) func() {
 		case <-time.After(5 * time.Second):
 		}
 	}
-	_ = os.WriteFile(pidFile, []byte(strconv.Itoa(os.Getpid())), 0o644)
+	_ = os.MkdirAll(filepath.Dir(pidFile), 0o700)
+	_ = os.WriteFile(pidFile, []byte(strconv.Itoa(os.Getpid())), 0o600)
 	return func() {
 		raw, err := os.ReadFile(pidFile)
 		if err == nil && strings.TrimSpace(string(raw)) == strconv.Itoa(os.Getpid()) {

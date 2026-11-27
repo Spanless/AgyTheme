@@ -90,3 +90,45 @@ func TestInspectJsoncRootObject(t *testing.T) {
 		t.Fatalf("expected property detected: %+v", info2)
 	}
 }
+
+func TestIsAllowedOriginEnforcesHostBoundaries(t *testing.T) {
+	if !IsAllowedOrigin("http://127.0.0.1:51234/index.html", nil) {
+		t.Error("expected loopback ipv4 origin allowed")
+	}
+	if !IsAllowedOrigin("https://localhost:8443/c/abc", nil) {
+		t.Error("expected localhost origin allowed")
+	}
+	if !IsAllowedOrigin("vscode-file://vscode-app/index.html", nil) {
+		t.Error("expected vscode-file origin allowed")
+	}
+	if !IsAllowedOrigin("plugin://swarm--abc/index.html", nil) {
+		t.Error("expected swarm plugin origin allowed")
+	}
+	if IsAllowedOrigin("https://localhost.evil.example/", nil) {
+		t.Error("prefix bypass localhost.evil.example must be rejected")
+	}
+	if IsAllowedOrigin("http://127.0.0.1.nip.io/", nil) {
+		t.Error("prefix bypass 127.0.0.1.nip.io must be rejected")
+	}
+	if IsAllowedOrigin("https://localhost@evil.example/", nil) {
+		t.Error("userinfo bypass localhost@evil.example must be rejected")
+	}
+	if IsAllowedOrigin("vscode-file-evil://x", nil) {
+		t.Error("scheme prefix bypass vscode-file-evil must be rejected")
+	}
+	if IsAllowedOrigin("http://127.0.0.1:9000/app", []string{"http://127.0.0.1:8080"}) {
+		t.Error("mismatched explicit port must be rejected")
+	}
+	if !IsAllowedOrigin("http://127.0.0.1:8080/app", []string{"http://127.0.0.1:8080"}) {
+		t.Error("matching explicit port must be allowed")
+	}
+}
+
+func TestIsLoopbackHost(t *testing.T) {
+	if !IsLoopbackHost("127.0.0.1") || !IsLoopbackHost("localhost") || !IsLoopbackHost("::1") || !IsLoopbackHost("[::1]") {
+		t.Error("expected loopback hosts accepted")
+	}
+	if IsLoopbackHost("localhost.evil.example") || IsLoopbackHost("192.168.1.1") || IsLoopbackHost("example.com") || IsLoopbackHost("") {
+		t.Error("expected non-loopback hosts rejected")
+	}
+}

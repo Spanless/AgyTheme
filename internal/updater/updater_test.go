@@ -241,3 +241,22 @@ func TestApplyRejectsChecksumMismatchWithoutTouchingBinary(t *testing.T) {
 		t.Fatalf("binary modified on failed checksum: %q", string(gotBin))
 	}
 }
+
+func TestCheckRejectsInvalidSemverTag(t *testing.T) {
+	u := New(Config{
+		CurrentVersion: "0.4.0",
+		PluginDir:      t.TempDir(),
+		RootDir:        t.TempDir(),
+		GOOS:           "darwin",
+		GOARCH:         "arm64",
+		HTTPClient: &http.Client{
+			Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				return makeResponse(http.StatusOK, []byte(`{"tag_name":"v../evil","assets":[]}`), "application/json"), nil
+			}),
+		},
+	})
+	res := u.Check(context.Background())
+	if res.Status != "error" || res.UpdateAvailable {
+		t.Fatalf("expected error for invalid semver tag, got %+v", res)
+	}
+}

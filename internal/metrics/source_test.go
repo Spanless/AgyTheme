@@ -391,3 +391,18 @@ func TestSourceContextBreakdownFallsBackToStream(t *testing.T) {
 		t.Errorf("unexpected stream fallback groups: %+v", bd)
 	}
 }
+
+func TestNewLSClientRejectsNonLoopbackAddress(t *testing.T) {
+	if NewLSClient("https://example.com:443", "tok") != nil {
+		t.Fatal("expected remote host rejected")
+	}
+	if NewLSClient("http://localhost@example.com:8080", "tok") != nil {
+		t.Fatal("expected userinfo host rejected")
+	}
+	if NewLSClient("127.0.0.1:12345", "tok") == nil {
+		t.Fatal("expected loopback address accepted")
+	}
+	if NewLSClient("http://[::1]:12345", "tok") == nil {
+		t.Fatal("expected ipv6 loopback address accepted")
+	}
+}

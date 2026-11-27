@@ -111,6 +111,12 @@ go run ./cmd/agytheme install
 - **文档**：只描述当前最新架构与用法，不保留冗余背景说明。
 - **注释**：不写解释“做了什么”的注释；仅在外部协议约定（如宿主环境变量、跨进程/跨 iframe 消息、wire 格式）或非直观边界约束处保留简短单行注释。
 
+## 安全
+
+- **本地调试端口边界**：AgyTheme 通过 Electron 的 `--remote-debugging-port` 注入界面；开启该端口意味着本机同用户下的其他进程也可连接并调试 Antigravity 窗口。默认使用随机端口（`--remote-debugging-port=0`）。
+- **本地服务隔离**：侧边栏面板仅监听 `127.0.0.1` 并校验宿主签发的令牌；CDP 与语言服务客户端仅连接本机回环地址；运行时锁文件存放在用户私有目录。
+- **更新校验**：内置更新仅接受 GitHub 官方 HTTPS 源，替换前校验安装包 SHA-256。漏洞上报见 [SECURITY.md](SECURITY.md)。
+
 ## 协议
 
 [MIT](LICENSE)

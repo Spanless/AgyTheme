@@ -521,7 +521,8 @@ func RelaunchAntigravityWithCdp(channel string, force bool, runDaemonOnce func()
 		"reason":           "manual-cli-relaunch",
 		"handledPids":      merged,
 	}
-	_ = os.WriteFile(cdp.RelaunchGuardFile, shared.MarshalPretty(guard, "  "), 0o644)
+	_ = os.MkdirAll(filepath.Dir(cdp.RelaunchGuardFile), 0o700)
+	_ = os.WriteFile(cdp.RelaunchGuardFile, shared.MarshalPretty(guard, "  "), 0o600)
 
 	var launch cdp.HostProc
 	if len(procs) > 0 {
@@ -556,7 +557,11 @@ func RelaunchAntigravityWithCdp(channel string, force bool, runDaemonOnce func()
 	for _, p := range procs {
 		switch {
 		case runtime.GOOS == "darwin" && p.AppPath != "":
-			shared.RunCmd(3*time.Second, "osascript", "-e", `tell application "`+p.AppPath+`" to quit`)
+			shared.RunCmd(3*time.Second, "osascript",
+				"-e", "on run argv",
+				"-e", "tell application (item 1 of argv) to quit",
+				"-e", "end run",
+				"--", p.AppPath)
 			for i := 0; i < 25 && shared.IsPidAlive(p.Pid); i++ {
 				shared.SleepMs(100)
 			}

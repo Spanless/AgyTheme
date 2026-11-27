@@ -15,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Spanless/AgyTheme/internal/shared"
 )
 
 type wsConn struct {
@@ -41,6 +43,13 @@ func wsDial(ctx context.Context, rawURL string) (*wsConn, error) {
 	if u.Scheme != "ws" {
 		return nil, fmt.Errorf("unsupported websocket scheme %q", u.Scheme)
 	}
+	if u.User != nil || !shared.IsLoopbackHost(u.Hostname()) {
+		return nil, fmt.Errorf("refusing non-loopback websocket host %q", u.Hostname())
+	}
+	reqURI := u.RequestURI()
+	if strings.ContainsAny(u.Host+reqURI, "\r\n") {
+		return nil, errors.New("invalid websocket url")
+	}
 	var d net.Dialer
 	nc, err := d.DialContext(ctx, "tcp", u.Host)
 	if err != nil {
@@ -52,7 +61,7 @@ func wsDial(ctx context.Context, rawURL string) (*wsConn, error) {
 	keyRaw := make([]byte, 16)
 	_, _ = rand.Read(keyRaw)
 	key := base64.StdEncoding.EncodeToString(keyRaw)
-	req := "GET " + u.RequestURI() + " HTTP/1.1\r\n" +
+	req := "GET " + reqURI + " HTTP/1.1\r\n" +
 		"Host: " + u.Host + "\r\n" +
 		"Upgrade: websocket\r\n" +
 		"Connection: Upgrade\r\n" +

@@ -10,9 +10,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
+
+	"github.com/Spanless/AgyTheme/internal/shared"
 )
 
 type LSClient struct {
@@ -31,7 +34,16 @@ func NewLSClient(addr, token string) *LSClient {
 	if !strings.Contains(addr, "://") {
 		addr = "http://" + addr
 	}
-	return &LSClient{base: strings.TrimRight(addr, "/"), token: token, hc: &http.Client{}}
+	u, err := url.Parse(addr)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || !shared.IsLoopbackHost(u.Hostname()) {
+		return nil
+	}
+	hc := &http.Client{
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	return &LSClient{base: strings.TrimRight(addr, "/"), token: token, hc: hc}
 }
 
 // Antigravity injects the local LanguageServerService ConnectRPC address and CSRF token into sidecars.
@@ -67,7 +79,7 @@ func (c *LSClient) call(ctx context.Context, method string, req, resp any) error
 		return err
 	}
 	defer res.Body.Close()
-	raw, err := io.ReadAll(res.Body)
+	raw, err := io.ReadAll(io.LimitReader(res.Body, maxEnvelopeBytes))
 	if err != nil {
 		return err
 	}

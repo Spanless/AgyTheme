@@ -39,3 +39,22 @@ func TestFetchTargetsFromPortFailsQuietly(t *testing.T) {
 		t.Fatalf("404 should give no targets, got %+v", got)
 	}
 }
+
+func TestFetchTargetsFromPortRejectsOversizedContentLength(t *testing.T) {
+	port := serverPort(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			return
+		}
+		conn, buf, err := hj.Hijack()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_, _ = buf.WriteString("HTTP/1.1 200 OK\r\nContent-Length: 99999999999\r\n\r\n")
+		_ = buf.Flush()
+	}))
+	if got := FetchTargetsFromPort(port, time.Second); got != nil {
+		t.Fatalf("oversized Content-Length should be rejected, got %+v", got)
+	}
+}

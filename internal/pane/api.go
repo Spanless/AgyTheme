@@ -270,7 +270,7 @@ func (a *API) handleSaveSettings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cfgPath := filepath.Join(a.RootDir, "user", "config.json")
-	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o700); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
@@ -300,7 +300,7 @@ func (a *API) handleSaveSettings(w http.ResponseWriter, r *http.Request) {
 		doc.Set("modules", mods)
 	}
 
-	if err := installer.WriteFileAtomic(cfgPath, shared.MarshalPretty(doc, "  "), 0o644); err != nil {
+	if err := installer.WriteFileAtomic(cfgPath, shared.MarshalPretty(doc, "  "), 0o600); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}

@@ -38,20 +38,25 @@
   })();
   const urlToken = urlParams.get('token') || '';
   const initialCid = urlParams.get('conversationId') || '';
+  if (urlToken && typeof window.history !== 'undefined' && typeof window.history.replaceState === 'function') {
+    try {
+      const clean = new URL(window.location.href);
+      clean.searchParams.delete('token');
+      window.history.replaceState(null, '', clean.pathname + clean.search + clean.hash);
+    } catch (e) {}
+  }
 
   function apiFetch(path, method, body) {
     const headers = { 'X-AgyTheme-UI': '1' };
-    let target = path;
     if (urlToken) {
       headers['x-sidecar-token'] = urlToken;
-      target += (path.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(urlToken);
     }
     const opts = { method: method || 'GET', credentials: 'same-origin', headers };
     if (body !== undefined) {
       headers['Content-Type'] = 'application/json';
       opts.body = JSON.stringify(body);
     }
-    return fetch(target, opts).then(async (res) => {
+    return fetch(path, opts).then(async (res) => {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error((data && data.error) || '请求失败 (' + res.status + ')');
       return data;

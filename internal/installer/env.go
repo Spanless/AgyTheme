@@ -240,13 +240,10 @@ func (l Live) StateValue(k string) any {
 const liveStateExpr = `(() => ({
                 __isHost: !!(
                   (window.location && window.location.protocol === 'vscode-file:') ||
-                  (window.__APP_CONFIG__ && window.__APP_CONFIG__.productName === 'antigravity') ||
                   (window.electronNative && (
                     typeof window.electronNative.setTitleBarOverlay === 'function' ||
                     typeof window.electronNative.getZoomLevel === 'function'
-                  )) ||
-                  (typeof document !== 'undefined' && document.querySelector &&
-                    document.querySelector('link[href*="/jetbox.css"], body[data-agy-theme], body[data-newux-theme], [id="antigravity.agentSidePanelInputBox"]'))
+                  ))
                 ),
                 version: window.__ag_patch_version || null,
                 bodyReady: window.__ag_body_ready === true,

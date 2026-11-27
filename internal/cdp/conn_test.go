@@ -118,3 +118,14 @@ func TestDialRejectsNonWebSocketEndpoint(t *testing.T) {
 		t.Fatal("Dial should fail when the server does not upgrade")
 	}
 }
+
+func TestDialRejectsNonLoopbackHost(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if _, err := Dial(ctx, "ws://example.com:9222/devtools/page/1"); err == nil {
+		t.Fatal("Dial should reject non-loopback host")
+	}
+	if _, err := Dial(ctx, "ws://localhost@example.com:9222/devtools/page/1"); err == nil {
+		t.Fatal("Dial should reject userinfo url")
+	}
+}

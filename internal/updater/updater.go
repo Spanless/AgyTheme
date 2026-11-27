@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -33,6 +34,8 @@ const (
 	maxSumsBytes      = 1 << 20
 	maxEntryBytes     = 64 << 20
 )
+
+var semverRe = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$`)
 
 var defaultAllowedHosts = []string{
 	"api.github.com",
@@ -242,6 +245,9 @@ func (u *Updater) Check(ctx context.Context) CheckResult {
 	if latest == "" {
 		return u.finishCheck(CheckResult{CurrentVersion: cur, Status: "no_release", CheckedAt: now})
 	}
+	if !semverRe.MatchString(latest) {
+		return u.finishCheck(CheckResult{CurrentVersion: cur, Status: "error", CheckedAt: now, Error: "版本标签格式无效"})
+	}
 
 	avail := CompareVersion(latest, cur) > 0
 	assetName, assetURL, sumsURL := pickReleaseAssets(rel.Assets, latest, u.cfg.GOOS)
@@ -365,6 +371,9 @@ func (u *Updater) runApply(ctx context.Context) error {
 
 	if rel.AssetURL == "" || rel.AssetName == "" {
 		return u.failApply(errors.New("未找到当前平台安装包"))
+	}
+	if filepath.Base(rel.AssetName) != rel.AssetName || strings.ContainsAny(rel.AssetName, `/\`) {
+		return u.failApply(errors.New("安装包文件名无效"))
 	}
 	if rel.SumsURL == "" {
 		return u.failApply(errors.New("发布包缺少校验文件"))

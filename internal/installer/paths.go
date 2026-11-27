@@ -29,22 +29,27 @@ func BinaryName() string {
 
 func StopRunningDaemonProcesses() []int {
 	stopped := []int{}
-	tmp := os.TempDir()
-	entries, err := os.ReadDir(tmp)
-	if err != nil {
-		return stopped
+	dirs := []string{shared.RuntimeDir()}
+	if tmp := os.TempDir(); tmp != "" && tmp != dirs[0] {
+		dirs = append(dirs, tmp)
 	}
-	for _, e := range entries {
-		name := e.Name()
-		if !strings.HasPrefix(name, daemonPidPrefix) || !strings.HasSuffix(name, ".pid") {
+	for _, dir := range dirs {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
 			continue
 		}
-		pidPath := filepath.Join(tmp, name)
-		pid := shared.ReadPidFile(pidPath)
-		if shared.IsConfirmedDaemonPid(pid) && shared.TerminatePid(pid) == nil {
-			stopped = append(stopped, pid)
+		for _, e := range entries {
+			name := e.Name()
+			if !strings.HasPrefix(name, daemonPidPrefix) || !strings.HasSuffix(name, ".pid") {
+				continue
+			}
+			pidPath := filepath.Join(dir, name)
+			pid := shared.ReadPidFile(pidPath)
+			if shared.IsConfirmedDaemonPid(pid) && shared.TerminatePid(pid) == nil {
+				stopped = append(stopped, pid)
+			}
+			_ = os.Remove(pidPath)
 		}
-		_ = os.Remove(pidPath)
 	}
 	for _, pid := range stopped {
 		for i := 0; i < 20 && shared.IsPidAlive(pid); i++ {

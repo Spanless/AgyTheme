@@ -3,7 +3,7 @@ package agytheme
 import "embed"
 
 // Release builds override Version via -ldflags "-X github.com/Spanless/AgyTheme.Version=x.y.z".
-var Version = "0.1.0"
+var Version = "0.1.1"
 
 //go:embed core/runtime/*.js core/styles/*.css core/i18n.json core/pane/*.js core/pane/*.css
 var CoreFS embed.FS

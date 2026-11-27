@@ -22,13 +22,10 @@ const hostProbeExpr = `(() => {
               const loc = window.location;
               const isHost = Boolean(
                 (loc && loc.protocol === 'vscode-file:') ||
-                (window.__APP_CONFIG__ && window.__APP_CONFIG__.productName === 'antigravity') ||
                 (window.electronNative && (
                   typeof window.electronNative.setTitleBarOverlay === 'function' ||
                   typeof window.electronNative.getZoomLevel === 'function'
-                )) ||
-                (typeof document !== 'undefined' && document.querySelector &&
-                  document.querySelector('link[href*="/jetbox.css"], body[data-agy-theme], body[data-newux-theme], [id="antigravity.agentSidePanelInputBox"]'))
+                ))
               );
               return isHost;
             })()`
