@@ -28,7 +28,8 @@ Single Go binary running as a Google Antigravity plugin sidecar. Antigravity sta
    - macOS / Linux: `unzip -q <zip> -d "$TMPDIR/agytheme-install"`
    - Windows: `Expand-Archive <zip> "$env:TEMP\agytheme-install" -Force`
 2. Run install:
-   - macOS / Linux: `chmod +x <dir>/agytheme/bin/<binary> && <dir>/agytheme/bin/<binary> install`
+   - macOS: `xattr -dr com.apple.quarantine <dir>/agytheme 2>/dev/null || true; chmod +x <dir>/agytheme/bin/<binary> && <dir>/agytheme/bin/<binary> install`
+   - Linux: `chmod +x <dir>/agytheme/bin/<binary> && <dir>/agytheme/bin/<binary> install`
    - Windows: `& "<dir>\agytheme\bin\<binary>" install`
 3. Relay the final stderr summary line to the user.
 4. Remove the temporary extraction directory.

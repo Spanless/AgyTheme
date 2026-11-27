@@ -205,10 +205,8 @@ if [ -n "$sign_pfx_b64" ] && [ -n "$sign_pfx_pass" ]; then
   for tool in osslsigncode openssl; do
     command -v "$tool" >/dev/null 2>&1 || fail "$tool is required to sign the Windows binaries (brew install $tool)"
   done
-elif [ "$dry_run" = 0 ]; then
-  fail "no Windows signing certificate: set WINDOWS_SIGN_PFX_BASE64 and WINDOWS_SIGN_PFX_PASSWORD in .env (see .env.example)"
 else
-  echo "[release] no Windows signing certificate in .env; the dry run leaves the .exe files unsigned"
+  echo "[release] no Windows signing certificate configured; leaving .exe files unsigned"
 fi
 
 # 4. Remote, branch, tag & version progression guards

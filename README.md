@@ -41,6 +41,7 @@ Google Antigravity 插件：浅色 / 深色主题、中文界面与实时会话�
 **手动安装**：解压后运行对应平台的二进制文件：
 
 ```bash
+xattr -dr com.apple.quarantine agytheme 2>/dev/null || true   # macOS 浏览器下载时清除隔离属性
 agytheme/bin/agytheme-darwin-arm64 install
 agytheme/bin/agytheme-darwin-arm64 install --only i18n,metrics
 ```
