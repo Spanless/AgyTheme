@@ -12,10 +12,6 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-#ag-telemetry-dock {
-  position: relative;
-}
-
 #ag-telemetry-dock .ag-dk-hright {
   display: inline-flex;
   align-items: center;

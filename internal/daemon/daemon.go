@@ -171,6 +171,23 @@ func Run(opts Options) {
 				}
 				return pane.DoctorStatus{OK: false, Summary: "未连接到 Antigravity 调试端口", CdpReachable: false}
 			},
+			Metrics: func(cid string) (*metrics.Payload, bool) {
+				if mgr == nil {
+					return nil, false
+				}
+				return mgr.MetricsPayload(cid)
+			},
+			WatchCid: func(cid string) {
+				if mgr != nil {
+					mgr.WatchPaneCid(cid)
+				}
+			},
+			Subscribe: func() (<-chan string, func()) {
+				if mgr == nil {
+					return nil, func() {}
+				}
+				return mgr.SubscribeMetrics()
+			},
 		}
 		if addr, stop, err := pane.ListenFromEnvWithAPI(bundle.NewPanePage(opts.Source), api); err == nil {
 			defer stop()

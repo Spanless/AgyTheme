@@ -160,7 +160,13 @@ type Manager struct {
 	lastDiscovery time.Time
 
 	metrics *metrics.Source
+
+	subMu     sync.Mutex
+	subSeq    int
+	listeners map[int]chan string
 }
+
+const idleHeartbeatInterval = 45 * time.Second
 
 func (m *Manager) ConfigureRelaunch(spawn func(HostProc) error, pendingFile string, minColdStartWindowSec float64) {
 	m.relaunch.Spawn = spawn
@@ -181,12 +187,62 @@ func NewManager(b *bundle.Controller, ls *metrics.LSClient, runOnce, safeMode bo
 		skipped:         map[string]string{},
 		meta:            map[string]targetMeta{},
 		themeModes:      map[string]string{},
+		listeners:       map[int]chan string{},
 	}
 	if !runOnce && ls != nil {
 		m.metrics = metrics.NewSource(ls, m.onConversationChanged)
 		m.metrics.Logf = func(format string, args ...any) { fmt.Printf(format+"\n", args...) }
 	}
 	return m
+}
+
+func (m *Manager) MetricsPayload(cid string) (*metrics.Payload, bool) {
+	if m.metrics == nil || cid == "" {
+		return nil, false
+	}
+	cfg := m.bundle.Config()
+	rc := metrics.ReaderConfig{
+		ManualContextLimit:   cfg.ManualContextLimit,
+		FallbackContextLimit: cfg.FallbackContextLimit,
+		TelemetryCacheMode:   cfg.TelemetryCacheMode,
+	}
+	return m.metrics.Payload(cid, rc)
+}
+
+func (m *Manager) WatchPaneCid(cid string) {
+	if m.metrics == nil {
+		return
+	}
+	if cid == "" {
+		m.metrics.SetWatched("pane", nil)
+		return
+	}
+	m.metrics.SetWatched("pane", []string{cid})
+}
+
+func (m *Manager) SubscribeMetrics() (<-chan string, func()) {
+	ch := make(chan string, 16)
+	m.subMu.Lock()
+	m.subSeq++
+	id := m.subSeq
+	m.listeners[id] = ch
+	m.subMu.Unlock()
+	return ch, func() {
+		m.subMu.Lock()
+		delete(m.listeners, id)
+		m.subMu.Unlock()
+	}
+}
+
+func (m *Manager) notifyListeners(cid string) {
+	m.subMu.Lock()
+	for _, ch := range m.listeners {
+		select {
+		case ch <- cid:
+		default:
+		}
+	}
+	m.subMu.Unlock()
 }
 
 func (m *Manager) watchConversations(id string, cids []string) {
@@ -196,6 +252,7 @@ func (m *Manager) watchConversations(id string, cids []string) {
 }
 
 func (m *Manager) onConversationChanged(cid string) {
+	m.notifyListeners(cid)
 	for _, t := range m.snapshot() {
 		if t.isSwarm || !t.confirmed() {
 			continue
@@ -292,6 +349,7 @@ type target struct {
 	activeCids   []string
 	pushed       map[string]pushedSession
 	evalScriptID string
+	lastActivity time.Time
 }
 
 func (t *target) ep() bundle.Endpoint {
@@ -382,7 +440,34 @@ func (t *target) inject() bool {
 		kind = "swarm iframe"
 	}
 	fmt.Printf("[Daemon] Injected (%s) into %s %s [%s]\n", patchVersion, kind, t.id, t.ep().Channel)
+	t.lastActivity = time.Now()
 	return true
+}
+
+func (t *target) applyPrefs(layout, cacheMode string) {
+	if t.isSwarm || !t.confirmed() {
+		return
+	}
+	b, _ := shared.MarshalNoEscape(map[string]string{
+		"telemetryLayout":    layout,
+		"telemetryCacheMode": cacheMode,
+	})
+	t.send("Runtime.evaluate", map[string]any{
+		"expression":    "(window.__ag_last_daemon_hb=Date.now(),window.__ag_apply_prefs&&window.__ag_apply_prefs(" + string(b) + "))",
+		"returnByValue": false,
+	})
+	t.lastActivity = time.Now()
+}
+
+func (t *target) pingHeartbeatIfQuiet(now time.Time) {
+	if t.isSwarm || !t.confirmed() || now.Sub(t.lastActivity) < idleHeartbeatInterval {
+		return
+	}
+	t.send("Runtime.evaluate", map[string]any{
+		"expression":    "window.__ag_last_daemon_hb=Date.now()",
+		"returnByValue": false,
+	})
+	t.lastActivity = now
 }
 
 func (t *target) pruneSessions() {
@@ -406,6 +491,7 @@ func (t *target) pushPayload(p *metrics.Payload) {
 		"expression":    "(window.__ag_last_daemon_hb = Date.now(), window.__ag_render_metrics && window.__ag_render_metrics(" + string(b) + "))",
 		"returnByValue": false,
 	})
+	t.lastActivity = time.Now()
 }
 
 func (t *target) syncMetrics(force bool) {
@@ -681,16 +767,18 @@ func (m *Manager) Sync() {
 	if m.tick%24 == 1 && m.LogTrim != nil {
 		m.LogTrim()
 	}
-	bundleChanged := m.bundle.RebuildIfNeeded()
+	structuralChanged, prefsChanged := m.bundle.RebuildDiff()
 	cfg := m.bundle.Config()
 	if !cfg.Enabled {
 		m.mu.Lock()
 		m.themeModes = map[string]string{}
 		m.mu.Unlock()
 	}
-	heartbeat := bundleChanged || m.tick%6 == 1
+	if structuralChanged || prefsChanged {
+		m.notifyListeners("*")
+	}
 	now := time.Now()
-	discover := m.runOnce || bundleChanged || m.AttachedCount() == 0 || now.Sub(m.lastDiscovery) >= targetDiscoveryInterval
+	discover := m.runOnce || structuralChanged || m.AttachedCount() == 0 || now.Sub(m.lastDiscovery) >= targetDiscoveryInterval
 
 	if !discover {
 		for _, t := range m.snapshot() {
@@ -698,10 +786,11 @@ func (m *Manager) Sync() {
 				continue
 			}
 			t.opMu.Lock()
-			if heartbeat {
-				t.checkAndInject()
+			if prefsChanged {
+				t.applyPrefs(cfg.TelemetryLayout, cfg.TelemetryCacheMode)
 			}
-			t.syncMetrics(false)
+			t.syncMetrics(prefsChanged)
+			t.pingHeartbeatIfQuiet(now)
 			t.opMu.Unlock()
 		}
 		return
@@ -793,13 +882,14 @@ func (m *Manager) Sync() {
 			t.mu.Unlock()
 			if confirmed {
 				t.opMu.Lock()
-				if bundleChanged {
+				if structuralChanged {
 					t.updateNewDocScript()
-				}
-				if heartbeat {
 					t.checkAndInject()
+				} else if prefsChanged {
+					t.applyPrefs(cfg.TelemetryLayout, cfg.TelemetryCacheMode)
 				}
-				t.syncMetrics(bundleChanged)
+				t.syncMetrics(structuralChanged || prefsChanged)
+				t.pingHeartbeatIfQuiet(now)
 				t.opMu.Unlock()
 			}
 		}

@@ -45,7 +45,8 @@
   } catch (e) {}
 
   const AG_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  const metricsByCid = (window.__ag_metrics_by_cid = {});
+  const metricsByCid = (window.__ag_metrics_by_cid =
+    window.__ag_metrics_by_cid && typeof window.__ag_metrics_by_cid === 'object' ? window.__ag_metrics_by_cid : {});
   const paneStates = (window.__ag_pane_states = {});
 
   function getOrCreatePaneState(key) {
@@ -413,6 +414,7 @@
     store: null,
     showCid: {},
     sent: new WeakMap(),
+    ready: new WeakSet(),
     pendingFocus: null
   };
 
@@ -532,15 +534,9 @@
     return null;
   }
 
-  function postPaneState(frame, forcePayload) {
+  function postPaneState(frame) {
     const shown = (frame.cid && nativePane.showCid[frame.cid]) || frame.cid;
-    const payload = (shown && metricsByCid[shown]) || null;
     const msg = { type: 'agytheme:state', cid: shown, snap: snapForCid(shown), theme: hostThemeMode(), prefs: panePrefs() };
-    const last = nativePane.sent.get(frame.win);
-    if (forcePayload || !last || last.payload !== payload || last.cid !== shown) {
-      msg.payload = payload;
-      nativePane.sent.set(frame.win, { payload, cid: shown });
-    }
     try {
       frame.win.postMessage(msg, '*');
     } catch (e) {}
@@ -549,7 +545,7 @@
   function postPaneStates() {
     if (!SIDE_PANE) return;
     const frames = paneFrames();
-    for (let i = 0; i < frames.length; i++) postPaneState(frames[i], false);
+    for (let i = 0; i < frames.length; i++) postPaneState(frames[i]);
   }
 
   function flushPendingFocus(frame) {
@@ -609,8 +605,11 @@
     const frame = paneFrames().find((f) => f.win === e.source);
     if (!frame) return;
     if (d.type === 'agytheme:ready') {
-      postPaneState(frame, true);
+      nativePane.ready.add(frame.win);
+      postPaneState(frame);
       flushPendingFocus(frame);
+    } else if (d.type === 'agytheme:hb') {
+      window.__ag_last_daemon_hb = Date.now();
     } else if (d.type === 'agytheme:prefs') {
       if (d.barMode === 'dur' || d.barMode === 'hit' || d.barMode === 'out') dockStorageSet(DOCK_KEY_MODE, d.barMode);
       if (d.distScope === 'turn' || d.distScope === 'session') dockStorageSet(DOCK_KEY_SCOPE, d.distScope);
@@ -1575,6 +1574,27 @@
       });
     } catch (e) {}
   }
+
+  window.__ag_apply_prefs = function (prefs) {
+    if (!prefs || typeof prefs !== 'object') return;
+    if (prefs.telemetryLayout === 'compact' || prefs.telemetryLayout === 'detailed') {
+      boot.telemetryLayout = prefs.telemetryLayout;
+      if (window.__ag_runtime_config) window.__ag_runtime_config.telemetryLayout = prefs.telemetryLayout;
+    }
+    if (prefs.telemetryCacheMode === 'session' || prefs.telemetryCacheMode === 'step') {
+      boot.telemetryCacheMode = prefs.telemetryCacheMode;
+    }
+    const panes = discoverConversationPanes();
+    for (let i = 0; i < panes.length; i++) {
+      const pane = panes[i];
+      const pill = document.getElementById(pane.pillId);
+      if (pill && pane.cid && metricsByCid[pane.cid]) {
+        paintPill(pill, metricsByCid[pane.cid], '');
+        ensureMetricsPillForPane(pane, true, true);
+      }
+    }
+    applyPendingWaitVisuals();
+  };
 
   window.__ag_render_metrics = function (payload) {
     window.__ag_last_daemon_hb = Date.now();

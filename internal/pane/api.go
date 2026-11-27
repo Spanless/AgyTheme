@@ -3,6 +3,7 @@ package pane
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
@@ -14,6 +15,7 @@ import (
 	agytheme "github.com/Spanless/AgyTheme"
 	"github.com/Spanless/AgyTheme/internal/bundle"
 	"github.com/Spanless/AgyTheme/internal/installer"
+	"github.com/Spanless/AgyTheme/internal/metrics"
 	"github.com/Spanless/AgyTheme/internal/shared"
 	"github.com/Spanless/AgyTheme/internal/updater"
 )
@@ -31,10 +33,12 @@ type API struct {
 	OnConfigChanged func()
 	Doctor          func() DoctorStatus
 	OpenDir         func(dir string) error
+	Metrics         func(cid string) (*metrics.Payload, bool)
+	WatchCid        func(cid string)
+	Subscribe       func() (<-chan string, func())
 }
 
 type settingsPatch struct {
-	Preset             *string         `json:"preset"`
 	TelemetryLayout    *string         `json:"telemetryLayout"`
 	TelemetryCacheMode *string         `json:"telemetryCacheMode"`
 	Modules            map[string]bool `json:"modules"`
@@ -50,7 +54,6 @@ type settingsView struct {
 }
 
 type settingsValues struct {
-	Preset             string          `json:"preset"`
 	TelemetryLayout    string          `json:"telemetryLayout"`
 	TelemetryCacheMode string          `json:"telemetryCacheMode"`
 	Modules            map[string]bool `json:"modules"`
@@ -143,6 +146,31 @@ func (a *API) handle(w http.ResponseWriter, r *http.Request) bool {
 		}
 		writeJSON(w, http.StatusOK, st)
 		return true
+	case "/api/metrics":
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", "GET")
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return true
+		}
+		cid := strings.TrimSpace(r.URL.Query().Get("cid"))
+		if cid != "" && a.WatchCid != nil {
+			a.WatchCid(cid)
+		}
+		var payload *metrics.Payload
+		var ready bool
+		if cid != "" && a.Metrics != nil {
+			payload, ready = a.Metrics(cid)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"cid": cid, "ready": ready, "payload": payload})
+		return true
+	case "/api/metrics/stream":
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", "GET")
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return true
+		}
+		a.handleMetricsStream(w, r)
+		return true
 	case "/api/open-dir":
 		if r.Method != http.MethodPost {
 			w.Header().Set("Allow", "POST")
@@ -171,10 +199,6 @@ func (a *API) readSettings() settingsView {
 	raw := map[string]any{}
 	shared.ReadJSONFile(cfgPath, &raw)
 
-	preset := "light"
-	if s, ok := raw["preset"].(string); ok && (s == "light" || s == "dark") {
-		preset = s
-	}
 	layout := "compact"
 	if s, ok := raw["telemetryLayout"].(string); ok && (s == "compact" || s == "detailed") {
 		layout = s
@@ -221,7 +245,6 @@ func (a *API) readSettings() settingsView {
 		PrevVersion:       prevVer,
 		RollbackAvailable: rollbackAvail,
 		Config: settingsValues{
-			Preset:             preset,
 			TelemetryLayout:    layout,
 			TelemetryCacheMode: cacheMode,
 			Modules:            mods,
@@ -235,10 +258,6 @@ func (a *API) handleSaveSettings(w http.ResponseWriter, r *http.Request) {
 	var patch settingsPatch
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 32*1024)).Decode(&patch); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "无效的请求格式"})
-		return
-	}
-	if patch.Preset != nil && *patch.Preset != "light" && *patch.Preset != "dark" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "无效的 preset 值"})
 		return
 	}
 	if patch.TelemetryLayout != nil && *patch.TelemetryLayout != "compact" && *patch.TelemetryLayout != "detailed" {
@@ -259,9 +278,6 @@ func (a *API) handleSaveSettings(w http.ResponseWriter, r *http.Request) {
 	doc := shared.NewOrderedMap()
 	if raw, err := os.ReadFile(cfgPath); err == nil {
 		_ = json.Unmarshal([]byte(shared.StripUtf8Bom(string(raw))), doc)
-	}
-	if patch.Preset != nil {
-		doc.Set("preset", *patch.Preset)
 	}
 	if patch.TelemetryLayout != nil {
 		doc.Set("telemetryLayout", *patch.TelemetryLayout)
@@ -292,6 +308,71 @@ func (a *API) handleSaveSettings(w http.ResponseWriter, r *http.Request) {
 		a.OnConfigChanged()
 	}
 	writeJSON(w, http.StatusOK, a.readSettings())
+}
+
+func (a *API) handleMetricsStream(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+	cid := strings.TrimSpace(r.URL.Query().Get("cid"))
+	if cid != "" && a.WatchCid != nil {
+		a.WatchCid(cid)
+	}
+	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK)
+
+	lastSig := ""
+	push := func(force bool) {
+		if cid == "" || a.Metrics == nil {
+			return
+		}
+		p, ready := a.Metrics(cid)
+		if !ready || p == nil {
+			return
+		}
+		if !force && p.Sig != "" && p.Sig == lastSig {
+			return
+		}
+		lastSig = p.Sig
+		raw, err := shared.MarshalNoEscape(p)
+		if err != nil {
+			return
+		}
+		_, _ = fmt.Fprintf(w, "event: metrics\ndata: %s\n\n", raw)
+		flusher.Flush()
+	}
+
+	push(true)
+	_, _ = fmt.Fprint(w, "event: ping\ndata: 1\n\n")
+	flusher.Flush()
+
+	var ch <-chan string
+	var unsub func()
+	if a.Subscribe != nil {
+		ch, unsub = a.Subscribe()
+		defer unsub()
+	}
+
+	pingTicker := time.NewTicker(30 * time.Second)
+	defer pingTicker.Stop()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case changedCid := <-ch:
+			if changedCid == cid || changedCid == "*" {
+				push(changedCid == "*")
+			}
+		case <-pingTicker.C:
+			_, _ = fmt.Fprint(w, "event: ping\ndata: 1\n\n")
+			flusher.Flush()
+		}
+	}
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

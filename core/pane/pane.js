@@ -23,26 +23,34 @@
     doctor: null,
     pollTimer: 0,
     rollbackConfirm: false,
-    rollbackTimer: 0
+    rollbackTimer: 0,
+    metricsEs: null,
+    metricsStreamCid: ''
   };
 
-  const urlToken = (() => {
+  const urlParams = (() => {
     try {
-      return new URLSearchParams(window.location.search || '').get('token') || '';
+      return new URLSearchParams(window.location.search || '');
     } catch (e) {
-      return '';
+      return new URLSearchParams();
     }
   })();
+  const urlToken = urlParams.get('token') || '';
+  const initialCid = urlParams.get('conversationId') || '';
 
   function apiFetch(path, method, body) {
     const headers = { 'X-AgyTheme-UI': '1' };
-    if (urlToken) headers['x-sidecar-token'] = urlToken;
+    let target = path;
+    if (urlToken) {
+      headers['x-sidecar-token'] = urlToken;
+      target += (path.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(urlToken);
+    }
     const opts = { method: method || 'GET', credentials: 'same-origin', headers };
     if (body !== undefined) {
       headers['Content-Type'] = 'application/json';
       opts.body = JSON.stringify(body);
     }
-    return fetch(path, opts).then(async (res) => {
+    return fetch(target, opts).then(async (res) => {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error((data && data.error) || '请求失败 (' + res.status + ')');
       return data;
@@ -111,8 +119,6 @@
       '<div class="ag-set-prog" id="ag-set-prog"><i id="ag-set-prog-bar"></i></div>' +
       '</div>' +
       '<div class="ag-set-box">' +
-      '<div class="ag-set-row"><span class="ag-set-label">主题预设</span>' +
-      '<div class="ag-set-seg" data-set-seg="preset"><button type="button" data-val="light">浅色</button><button type="button" data-val="dark">深色</button></div></div>' +
       '<div class="ag-set-row"><span class="ag-set-label">底部状态栏</span>' +
       '<div class="ag-set-seg" data-set-seg="telemetryLayout"><button type="button" data-val="compact">紧凑</button><button type="button" data-val="detailed">详细</button></div></div>' +
       '<div class="ag-set-row"><span class="ag-set-label">缓存统计口径</span>' +
@@ -634,14 +640,80 @@
     }
   }
 
+  function applyPayload(p) {
+    st.payload = p && typeof p === 'object' ? p : null;
+    st.view = payloadView(st.payload);
+    st.turns = st.payload && Array.isArray(st.payload.turns) ? st.payload.turns : null;
+    render(false);
+  }
+
+  function fetchMetricsOnce(cid) {
+    if (!cid) return;
+    apiFetch('/api/metrics?cid=' + encodeURIComponent(cid), 'GET')
+      .then((res) => {
+        if (st.cid !== cid) return;
+        if (res && res.ready && res.payload) applyPayload(res.payload);
+      })
+      .catch(() => {});
+  }
+
+  function closeMetricsStream() {
+    if (st.metricsEs) {
+      try {
+        st.metricsEs.close();
+      } catch (e) {}
+      st.metricsEs = null;
+    }
+    st.metricsStreamCid = '';
+  }
+
+  function connectMetricsStream(cid) {
+    if (!cid) {
+      closeMetricsStream();
+      return;
+    }
+    if (st.metricsEs && st.metricsStreamCid === cid) return;
+    closeMetricsStream();
+    st.metricsStreamCid = cid;
+    if (typeof EventSource !== 'function') {
+      fetchMetricsOnce(cid);
+      return;
+    }
+    let url = '/api/metrics/stream?cid=' + encodeURIComponent(cid);
+    if (urlToken) url += '&token=' + encodeURIComponent(urlToken);
+    try {
+      const es = new EventSource(url);
+      st.metricsEs = es;
+      es.addEventListener('metrics', (ev) => {
+        if (st.cid !== cid) return;
+        try {
+          applyPayload(JSON.parse(ev.data));
+        } catch (e) {}
+      });
+      es.addEventListener('ping', () => {
+        postToHost({ type: 'agytheme:hb' });
+      });
+      es.onerror = () => {
+        fetchMetricsOnce(cid);
+      };
+    } catch (e) {
+      fetchMetricsOnce(cid);
+    }
+  }
+
   function applyState(d) {
     const cid = typeof d.cid === 'string' ? d.cid : '';
     if (cid !== st.cid) {
       st.cid = cid;
+      st.payload = null;
+      st.view = null;
+      st.turns = null;
       st.pinnedIdx = -1;
       st.hoverIdx = -1;
       st.tlFromRight = 0;
       hideHover(true);
+      connectMetricsStream(cid);
+      render(false);
     }
     if (!st.prefsSeen && d.prefs && typeof d.prefs === 'object') {
       st.prefsSeen = true;
@@ -650,14 +722,11 @@
     }
     if (d.theme) setTheme(d.theme);
     st.snap = d.snap && typeof d.snap === 'object' ? d.snap : null;
-    if (!Object.prototype.hasOwnProperty.call(d, 'payload')) {
-      syncHeader();
+    if (Object.prototype.hasOwnProperty.call(d, 'payload') && d.payload) {
+      applyPayload(d.payload);
       return;
     }
-    st.payload = d.payload && typeof d.payload === 'object' ? d.payload : null;
-    st.view = payloadView(st.payload);
-    st.turns = st.payload && Array.isArray(st.payload.turns) ? st.payload.turns : null;
-    render(false);
+    syncHeader();
   }
 
   window.addEventListener('message', (e) => {
@@ -862,7 +931,6 @@
     return apiFetch('/api/settings', 'POST', patch)
       .then((data) => {
         st.settings = data;
-        if (patch.preset) setTheme(patch.preset);
         renderSettingsModal();
       })
       .catch(() => {});
@@ -998,7 +1066,12 @@
 
   setTheme(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
   buildDom();
+  if (initialCid) {
+    st.cid = initialCid;
+    connectMetricsStream(initialCid);
+  }
   render(true);
   postToHost({ type: 'agytheme:ready' });
+  window.addEventListener('beforeunload', closeMetricsStream);
   setTimeout(() => loadSettings(), 1200);
   setTimeout(() => loadSettings(), 7000);

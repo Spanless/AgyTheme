@@ -2,14 +2,17 @@ package pane
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Spanless/AgyTheme/internal/bundle"
+	"github.com/Spanless/AgyTheme/internal/metrics"
 	"github.com/Spanless/AgyTheme/internal/shared"
 	"github.com/Spanless/AgyTheme/internal/updater"
 )
@@ -71,9 +74,9 @@ func TestSettingsAPIPreservesUnknownKeysAndHonorsAuth(t *testing.T) {
 		t.Fatalf("expected 403 without UI header, got %d", rec.Code)
 	}
 
-	// Valid POST updates preset/layout/cacheMode/modules while preserving unknown fields.
+	// Valid POST updates layout/cacheMode/modules while preserving unknown fields including preset.
 	rec = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodPost, "/api/settings", bytes.NewBufferString(`{"preset":"dark","telemetryLayout":"detailed","telemetryCacheMode":"step","modules":{"metrics":false}}`))
+	req = httptest.NewRequest(http.MethodPost, "/api/settings", bytes.NewBufferString(`{"telemetryLayout":"detailed","telemetryCacheMode":"step","modules":{"metrics":false}}`))
 	req.AddCookie(cookies[0])
 	req.Header.Set("X-AgyTheme-UI", "1")
 	h.ServeHTTP(rec, req)
@@ -88,7 +91,7 @@ func TestSettingsAPIPreservesUnknownKeysAndHonorsAuth(t *testing.T) {
 	if !shared.ReadJSONFile(filepath.Join(userDir, "config.json"), &saved) {
 		t.Fatal("failed reading saved config.json")
 	}
-	if saved["preset"] != "dark" || saved["telemetryLayout"] != "detailed" || saved["telemetryCacheMode"] != "step" {
+	if saved["preset"] != "light" || saved["telemetryLayout"] != "detailed" || saved["telemetryCacheMode"] != "step" {
 		t.Fatalf("unexpected saved fields: %+v", saved)
 	}
 	if saved["contextLimit"] != float64(256000) {
@@ -127,5 +130,44 @@ func TestSettingsAPIPreservesUnknownKeysAndHonorsAuth(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK || openedDir != userDir {
 		t.Fatalf("POST /api/open-dir: %d dir=%q", rec.Code, openedDir)
+	}
+}
+
+func TestDirectMetricsAndSSEEndpoints(t *testing.T) {
+	watched := ""
+	sample := &metrics.Payload{Cid: "cid-1", CascadeID: "cid-1", HasData: true, Sig: "sig-1"}
+	api := &API{
+		RootDir:   t.TempDir(),
+		PluginDir: t.TempDir(),
+		WatchCid:  func(cid string) { watched = cid },
+		Metrics: func(cid string) (*metrics.Payload, bool) {
+			if cid == "cid-1" {
+				return sample, true
+			}
+			return nil, false
+		},
+		Subscribe: func() (<-chan string, func()) {
+			ch := make(chan string, 1)
+			return ch, func() {}
+		},
+	}
+	h := NewHandlerWithAPI(bundle.NewPanePage(bundle.EmbeddedSource()), token, api)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/metrics?cid=cid-1", nil)
+	req.Header.Set("x-sidecar-token", token)
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || watched != "cid-1" || !strings.Contains(rec.Body.String(), `"sig-1"`) {
+		t.Fatalf("GET /api/metrics: %d watched=%q body=%s", rec.Code, watched, rec.Body.String())
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/api/metrics/stream?cid=cid-1&token="+token, nil).WithContext(ctx)
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Header().Get("Content-Type"), "text/event-stream") ||
+		!strings.Contains(rec.Body.String(), "event: metrics") {
+		t.Fatalf("GET /api/metrics/stream: %d ct=%q body=%s", rec.Code, rec.Header().Get("Content-Type"), rec.Body.String())
 	}
 }

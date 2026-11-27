@@ -195,6 +195,32 @@ func TestSafeModeIgnoresUserFiles(t *testing.T) {
 	}
 }
 
+func TestRebuildDiffSeparatesPrefsFromStructuralChanges(t *testing.T) {
+	root := newRoot(t, "", `{"preset":"dark","telemetryLayout":"compact","telemetryCacheMode":"session"}`)
+	c := NewController(Options{RootDir: root, Source: EmbeddedSource(), SidePane: true})
+	struct1, prefs1 := c.RebuildDiff()
+	if !struct1 || prefs1 {
+		t.Fatalf("first build: structural=%v prefs=%v", struct1, prefs1)
+	}
+	_, _, pv1 := c.State()
+
+	os.WriteFile(filepath.Join(root, "user", "config.json"), []byte(`{"preset":"dark","telemetryLayout":"detailed","telemetryCacheMode":"step"}`), 0o644)
+	struct2, prefs2 := c.RebuildDiff()
+	if struct2 || !prefs2 {
+		t.Fatalf("prefs-only edit should not trigger structural rebuild: structural=%v prefs=%v", struct2, prefs2)
+	}
+	cfg2, _, pv2 := c.State()
+	if pv2 != pv1 || cfg2.TelemetryLayout != "detailed" || cfg2.TelemetryCacheMode != "step" {
+		t.Fatalf("unexpected state after prefs edit: pv=%s cfg=%+v", pv2, cfg2)
+	}
+
+	os.WriteFile(filepath.Join(root, "user", "config.json"), []byte(`{"preset":"dark","telemetryLayout":"detailed","telemetryCacheMode":"step","modules":{"i18n":false}}`), 0o644)
+	struct3, _ := c.RebuildDiff()
+	if !struct3 {
+		t.Fatal("module toggle must trigger structural rebuild")
+	}
+}
+
 func TestI18nDictionary(t *testing.T) {
 	raw, err := fs.ReadFile(agytheme.CoreFS, "core/i18n.json")
 	if err != nil {

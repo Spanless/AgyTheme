@@ -388,6 +388,11 @@ type bootUserConfig struct {
 const placeholder = "})(__AG_BOOT_PAYLOAD__);"
 
 func (c *Controller) RebuildIfNeeded() bool {
+	structural, prefs := c.RebuildDiff()
+	return structural || prefs
+}
+
+func (c *Controller) RebuildDiff() (structuralChanged, prefsChanged bool) {
 	src := c.opts.Source
 	styleFiles := src.list("styles", ".css")
 	runtimeFiles := src.list("runtime", ".js")
@@ -416,7 +421,7 @@ func (c *Controller) RebuildIfNeeded() bool {
 	unchanged := sig == c.sig && c.script != ""
 	c.mu.RUnlock()
 	if unchanged {
-		return false
+		return false, false
 	}
 
 	userCfg := map[string]any{}
@@ -607,12 +612,13 @@ func (c *Controller) RebuildIfNeeded() bool {
 	template := strings.Join(runtimeParts, "\n")
 
 	dictJSON, _ := json.Marshal(merged)
+	// Exclude telemetryLayout/telemetryCacheMode from patchVersion so switching them uses lightweight live patching instead of full re-injection.
 	cfgJSON, _ := json.Marshal(map[string]any{
-		"preset": preset, "telemetryLayout": telemetryLayout, "telemetryCacheMode": telemetryCacheMode,
-		"modules": modules, "themeVars": themeVars, "selectors": selectors,
+		"preset": preset, "modules": modules, "themeVars": themeVars, "selectors": selectors,
 	})
 	h := sha256.New()
 	fmt.Fprint(h, enabled)
+	fmt.Fprint(h, c.opts.SidePane)
 	h.Write([]byte(template))
 	h.Write([]byte(baseCSS))
 	h.Write([]byte(customCSS))
@@ -655,12 +661,18 @@ func (c *Controller) RebuildIfNeeded() bool {
 	script := strings.Replace(template, placeholder, "})("+string(bootJSON)+");", 1)
 
 	c.mu.Lock()
+	hadScript := c.script != ""
+	prevPatch := c.patchVersion
+	prevLayout := c.activeConfig.TelemetryLayout
+	prevCache := c.activeConfig.TelemetryCacheMode
 	c.activeConfig = cfg
 	c.script = script
 	c.patchVersion = patchVersion
 	c.sig = sig
 	c.mu.Unlock()
-	return true
+	structuralChanged = !hadScript || prevPatch != patchVersion
+	prefsChanged = hadScript && !structuralChanged && (prevLayout != telemetryLayout || prevCache != telemetryCacheMode)
+	return structuralChanged, prefsChanged
 }
 
 func rawModsBool(userCfg map[string]any, key string) (bool, bool) {
