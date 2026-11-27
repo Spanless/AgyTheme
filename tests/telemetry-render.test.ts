@@ -246,9 +246,9 @@ describe('right inspector dock renderers', () => {
     const text = textOf(html);
     expect(text).toContain('上下文');
     expect(text).not.toContain('上限');
-    expect(text).toContain('峰值 3万 · 压 1');
+    expect(text).not.toContain('约 45 步');
     expect(text).toContain('步进时间线');
-    expect(text).toContain('累计分布');
+    expect(text).toContain('累计');
     expect(text).not.toContain('外环输入');
     expect(text).toContain('本轮');
     expect(text).toContain('整场');
@@ -271,10 +271,6 @@ describe('right inspector dock renderers', () => {
     const noThinkHtml = R.renderDockBody(noThink, { barMode: 'dur', distScope: 'session', pinnedIdx: -1 });
     expect((noThinkHtml.match(/class="ag-dk-fband"/g) || []).length).toBe(3);
     expect(noThinkHtml).toContain('class="ag-dk-frow is-zero" data-ag-fkey="think"');
-
-    const flat = fixture();
-    flat.ctx = { ...flat.ctx, used: 20000, peak: 20000, compactions: 0 };
-    expect(textOf(R.renderDockBody(flat, { barMode: 'dur', pinnedIdx: -1 }))).not.toContain('峰值');
   });
 
   test('unified chart scales to exact pixel dimensions, uses full bar height and marks compactions', () => {

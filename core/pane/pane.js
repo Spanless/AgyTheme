@@ -10,6 +10,7 @@
     snap: null,
     barMode: 'dur',
     distScope: 'session',
+    ctxExpanded: '',
     prefsSeen: false,
     pinnedIdx: -1,
     hoverIdx: -1,
@@ -86,7 +87,6 @@
       '<div class="ag-dk-hrow">' +
       '<div class="ag-dk-model" id="ag-dock-model">用量统计</div>' +
       '<div class="ag-dk-hright">' +
-      '<span class="ag-dk-status" id="ag-dock-status"><i></i><span id="ag-dock-stxt">空闲</span></span>' +
       '<button type="button" id="ag-dock-settings-btn" title="AgyTheme 设置" aria-label="AgyTheme 设置">' +
       '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
       '<circle cx="12" cy="12" r="3"></circle>' +
@@ -251,7 +251,12 @@
   function syncTimelineBar() {
     const scroller = byId('ag-dock-tl-scroll');
     const bar = byId('ag-dock-tl-bar');
-    if (!scroller || !bar) return;
+    if (!scroller) return;
+    const taxisWrap = byId('ag-dock-taxis-wrap');
+    if (taxisWrap && Math.abs(taxisWrap.scrollLeft - scroller.scrollLeft) > 0.5) {
+      taxisWrap.scrollLeft = scroller.scrollLeft;
+    }
+    if (!bar) return;
     const sw = scroller.scrollWidth;
     const cw = scroller.clientWidth;
     const maxLeft = Math.max(0, sw - cw);
@@ -358,6 +363,18 @@
         scroller.scrollLeft += d;
       }, { passive: false });
     }
+    const taxisWrap = byId('ag-dock-taxis-wrap');
+    if (taxisWrap && scroller && !taxisWrap.__agTlBound) {
+      taxisWrap.__agTlBound = true;
+      taxisWrap.addEventListener('wheel', (e) => {
+        if (scroller.scrollWidth <= scroller.clientWidth + 1) return;
+        const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? scroller.clientWidth : 1;
+        const d = (Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY) * unit;
+        if (!d) return;
+        e.preventDefault();
+        scroller.scrollLeft += d;
+      }, { passive: false });
+    }
     bindTimelineBar();
     const target = scroller || byId('ag-dock-chart-box');
     if (!target || typeof ResizeObserver === 'undefined') return;
@@ -402,13 +419,42 @@
     }
   }
 
+  function setCtxFocus(sec, key) {
+    if (!sec) return;
+    if (key) {
+      if (sec.getAttribute('data-ctx-focus') !== key) sec.setAttribute('data-ctx-focus', key);
+    } else if (sec.hasAttribute('data-ctx-focus')) {
+      sec.removeAttribute('data-ctx-focus');
+    }
+  }
+
   function savePrefs() {
     postToHost({ type: 'agytheme:prefs', barMode: st.barMode, distScope: st.distScope });
+  }
+
+  function toggleCtxBreakdown(key) {
+    if (!key) return;
+    const list = st.view && st.view.ctx && Array.isArray(st.view.ctx.breakdown) ? st.view.ctx.breakdown : [];
+    const grp = list.find((g) => g && g.key === key && g.expandable && Array.isArray(g.items) && g.items.length > 0);
+    if (!grp) return;
+    st.ctxExpanded = st.ctxExpanded === key ? '' : key;
+    render(true);
+    hideHover(true);
   }
 
   function onBodyClick(e) {
     const t = e.target && e.target.closest ? e.target : null;
     if (!t) return;
+    const ctxBtn = t.closest('[data-ag-ctx-toggle]');
+    if (ctxBtn) {
+      toggleCtxBreakdown(ctxBtn.getAttribute('data-ag-ctx-toggle') || '');
+      return;
+    }
+    const ctxSeg = t.closest('[data-ag-ctx-seg]');
+    if (ctxSeg) {
+      toggleCtxBreakdown(ctxSeg.getAttribute('data-ag-ctx-seg') || '');
+      return;
+    }
     const modeBtn = t.closest('[data-ag-barmode] button[data-mode]');
     if (modeBtn) {
       const next = modeBtn.getAttribute('data-mode');
@@ -455,6 +501,13 @@
     if (!view || !target) return;
     const body = byId('ag-dock-body');
     const flowEl = () => body.querySelector('.ag-dk-flow[data-ag-flow-scope]');
+    const ctxSecEl = () => body.querySelector('.ag-dk-sec-ctx');
+
+    const ctxKeyEl = target.closest('[data-ag-ctx-key], [data-ag-ctx-seg]');
+    const ctxFocusKey = ctxKeyEl
+      ? ctxKeyEl.getAttribute('data-ag-ctx-key') || ctxKeyEl.getAttribute('data-ag-ctx-seg') || ''
+      : '';
+    setCtxFocus(ctxSecEl(), ctxFocusKey);
 
     const chartSvg = target.closest('svg[data-ag-unified]');
     if (chartSvg && st.chartMeta) {
@@ -522,7 +575,11 @@
 
   function onBodyLeave() {
     clearBarHover();
-    setFlowFocus(byId('ag-dock-body').querySelector('.ag-dk-flow[data-ag-flow-scope]'), '');
+    const body = byId('ag-dock-body');
+    if (body) {
+      setFlowFocus(body.querySelector('.ag-dk-flow[data-ag-flow-scope]'), '');
+      setCtxFocus(body.querySelector('.ag-dk-sec-ctx'), '');
+    }
     hideHover(false);
   }
 
@@ -563,36 +620,10 @@
   function syncHeader() {
     const snap = st.snap;
     const view = st.view;
-    const running = Boolean(snap && (snap.isExecuting || snap.visualState === 'running'));
 
     const modelEl = byId('ag-dock-model');
     const modelName = (view && view.last && view.last.model) || '用量统计';
     if (modelEl && modelEl.textContent !== modelName) modelEl.textContent = modelName;
-
-    const statusEl = byId('ag-dock-status');
-    const stxtEl = byId('ag-dock-stxt');
-    if (statusEl && stxtEl) {
-      const cls =
-        'ag-dk-status' +
-        (snap && snap.visualState === 'error'
-          ? ' is-err'
-          : snap && snap.visualState === 'slow'
-          ? ' is-warn'
-          : running
-          ? ' is-run'
-          : '');
-      if (statusEl.className !== cls) statusEl.className = cls;
-      const startedMs = view && view.turn && view.turn.startedMs > 0 ? view.turn.startedMs : 0;
-      const txt =
-        running && startedMs > 0
-          ? tmFmtClock((Date.now() - startedMs) / 1000)
-          : snap && snap.chipText
-          ? snap.chipText
-          : running
-          ? '执行中'
-          : '空闲';
-      if (stxtEl.textContent !== txt) stxtEl.textContent = txt;
-    }
 
     const alertEl = byId('ag-dock-alert');
     if (alertEl) {
@@ -627,11 +658,19 @@
     const html = renderDockBody(st.view, {
       barMode: st.barMode,
       distScope: st.distScope,
-      pinnedIdx: st.pinnedIdx
+      pinnedIdx: st.pinnedIdx,
+      ctxExpanded: st.ctxExpanded
     });
     if (force || body.__agRaw !== html) {
+      const prevSub = body.querySelector('.ag-dk-csub');
+      const prevSubKey = prevSub ? prevSub.getAttribute('data-ag-ctx-sub') : '';
+      const prevSubTop = prevSub ? prevSub.scrollTop : 0;
       body.__agRaw = html;
       body.innerHTML = html;
+      if (prevSubKey && prevSubTop > 0) {
+        const nextSub = body.querySelector('.ag-dk-csub[data-ag-ctx-sub="' + prevSubKey + '"]');
+        if (nextSub) nextSub.scrollTop = prevSubTop;
+      }
       attachChartObserver();
       paintChart();
       if (st.pinnedIdx >= 0) hideHover(false);
@@ -710,6 +749,7 @@
       st.turns = null;
       st.pinnedIdx = -1;
       st.hoverIdx = -1;
+      st.ctxExpanded = '';
       st.tlFromRight = 0;
       hideHover(true);
       connectMetricsStream(cid);

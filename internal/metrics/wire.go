@@ -61,6 +61,65 @@ type wireRetryInfo struct {
 	RetryReason string `json:"retryReason"`
 }
 
+type wireTokenItem struct {
+	Name      string `json:"name"`
+	NumTokens jnum   `json:"numTokens"`
+}
+
+type wireTokenGroup struct {
+	Name      string          `json:"name"`
+	Type      string          `json:"type"`
+	Source    string          `json:"source"`
+	NumTokens jnum            `json:"numTokens"`
+	Children  []wireTokenItem `json:"children"`
+}
+
+type rawTokenItem struct {
+	Name   string
+	Tokens float64
+}
+
+type rawTokenGroup struct {
+	Name     string
+	Type     string
+	Source   string
+	Tokens   float64
+	Children []rawTokenItem
+}
+
+type rawTokenBreakdown struct {
+	Groups []rawTokenGroup
+	Total  float64
+}
+
+func toRawTokenGroups(wg []wireTokenGroup) []rawTokenGroup {
+	if len(wg) == 0 {
+		return nil
+	}
+	out := make([]rawTokenGroup, 0, len(wg))
+	for _, g := range wg {
+		rg := rawTokenGroup{
+			Name:   strings.TrimSpace(g.Name),
+			Type:   strings.TrimSpace(g.Type),
+			Source: strings.TrimSpace(g.Source),
+			Tokens: float64(g.NumTokens),
+		}
+		if len(g.Children) > 0 {
+			rg.Children = make([]rawTokenItem, 0, len(g.Children))
+			for _, ch := range g.Children {
+				if tok := float64(ch.NumTokens); tok > 0 {
+					rg.Children = append(rg.Children, rawTokenItem{
+						Name:   strings.TrimSpace(ch.Name),
+						Tokens: tok,
+					})
+				}
+			}
+		}
+		out = append(out, rg)
+	}
+	return out
+}
+
 type wireGen struct {
 	StepIndices []int64 `json:"stepIndices"`
 	ChatModel   struct {
@@ -72,7 +131,12 @@ type wireGen struct {
 		RetryInfos        []wireRetryInfo `json:"retryInfos"`
 		ChatStartMetadata struct {
 			ContextWindowMetadata struct {
-				MaxContextTokens jnum `json:"maxContextTokens"`
+				EstimatedTokensUsed jnum `json:"estimatedTokensUsed"`
+				MaxContextTokens    jnum `json:"maxContextTokens"`
+				TokenBreakdown      *struct {
+					Groups      []wireTokenGroup `json:"groups"`
+					TotalTokens jnum             `json:"totalTokens"`
+				} `json:"tokenBreakdown"`
 			} `json:"contextWindowMetadata"`
 		} `json:"chatStartMetadata"`
 	} `json:"chatModel"`
@@ -109,6 +173,12 @@ func (w *wireGen) genItem(idx int64) GenItem {
 		TotDur:     ttft + stream,
 	}
 	g.Ctx = g.InTok + g.CacheWrite + g.CacheRead
+	if tb := cm.ChatStartMetadata.ContextWindowMetadata.TokenBreakdown; tb != nil && len(tb.Groups) > 0 {
+		g.Breakdown = &rawTokenBreakdown{
+			Groups: toRawTokenGroups(tb.Groups),
+			Total:  float64(tb.TotalTokens),
+		}
+	}
 	if n := len(cm.RetryInfos); n > 0 {
 		last := cm.RetryInfos[n-1]
 		g.ErrMsg = strings.TrimSpace(last.Error)
@@ -134,6 +204,7 @@ type GenItem struct {
 	TotDur     float64
 	ErrMsg     string
 	APIError   bool
+	Breakdown  *rawTokenBreakdown
 }
 
 func (g *GenItem) apiFailure() bool { return g.APIError && g.ErrMsg != "" && !IsCancelText(g.ErrMsg) }
@@ -190,6 +261,10 @@ type wireStep struct {
 		SourceTrajectoryStepInfo struct {
 			MetadataIndex *jnum `json:"metadataIndex"`
 		} `json:"sourceTrajectoryStepInfo"`
+		ToolCall *struct {
+			Name string `json:"name"`
+		} `json:"toolCall"`
+		ToolSource string `json:"toolSource"`
 	} `json:"metadata"`
 	ErrorMessage *struct {
 		Error *wireErrorDetails `json:"error"`
@@ -208,6 +283,8 @@ type stepInfo struct {
 	RetryErr     string
 	CpMetaIdx    float64
 	SummaryBytes int
+	ToolName     string
+	ToolSource   string
 }
 
 func (s *stepInfo) settled() bool { return !isActiveStatus(s.Status) }
@@ -215,7 +292,18 @@ func (s *stepInfo) settled() bool { return !isActiveStatus(s.Status) }
 func parseStep(raw json.RawMessage) stepInfo {
 	var w wireStep
 	_ = json.Unmarshal(raw, &w)
-	s := stepInfo{Type: w.Type, Status: w.Status, StartMs: timestampMs(w.Metadata.CreatedAt), Bytes: len(raw), CpMetaIdx: -1, SummaryBytes: -1}
+	s := stepInfo{
+		Type:         w.Type,
+		Status:       w.Status,
+		StartMs:      timestampMs(w.Metadata.CreatedAt),
+		Bytes:        len(raw),
+		CpMetaIdx:    -1,
+		SummaryBytes: -1,
+		ToolSource:   strings.TrimSpace(w.Metadata.ToolSource),
+	}
+	if w.Metadata.ToolCall != nil {
+		s.ToolName = strings.TrimSpace(w.Metadata.ToolCall.Name)
+	}
 	if mi := w.Metadata.SourceTrajectoryStepInfo.MetadataIndex; mi != nil {
 		s.CpMetaIdx = float64(*mi)
 	}
@@ -268,8 +356,11 @@ type agentStateUpdate struct {
 			TotalLength *jnum `json:"totalLength"`
 		} `json:"turnsUpdate"`
 		ContextWindowUsage *struct {
-			GeneratorMetadataIndex *jnum `json:"generatorMetadataIndex"`
-			LastStepIndex          *jnum `json:"lastStepIndex"`
+			GeneratorMetadataIndex *jnum            `json:"generatorMetadataIndex"`
+			LastStepIndex          *jnum            `json:"lastStepIndex"`
+			EstimatedTokensUsed    jnum             `json:"estimatedTokensUsed"`
+			MaxContextTokens       jnum             `json:"maxContextTokens"`
+			TokenGroups            []wireTokenGroup `json:"tokenGroups"`
 		} `json:"contextWindowUsage"`
 	} `json:"update"`
 }

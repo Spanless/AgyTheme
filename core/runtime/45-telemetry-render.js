@@ -439,7 +439,7 @@
     return html;
   }
 
-  function tmFlowDistHtml(scope, stats, errors) {
+  function tmFlowDistHtml(scope, stats, errors, subLabel) {
     const prompt = tmNum(stats.prompt);
     const cr = tmNum(stats.cr);
     const fresh = tmNum(stats.fresh);
@@ -447,7 +447,6 @@
     const think = tmNum(stats.think);
     const resp = tmNum(stats.resp);
     const total = cr + fresh + think + resp;
-    const hit = prompt > 0 ? (cr / prompt) * 100 : tmNum(stats.hit);
 
     const items = [
       { key: 'cache', label: '缓存读', val: cr, color: 'var(--ag-c-cache)', dotCls: 'ag-c-cache' },
@@ -569,21 +568,10 @@
       })
       .join('');
 
-    const badgeCls = hit >= 85 ? ' is-good' : prompt > 0 && hit < 30 ? ' is-warn' : '';
     return (
       '<div class="ag-dk-flow" data-ag-flow-scope="' +
       scope +
       '">' +
-      '<div class="ag-dk-fhero">' +
-      '<div class="ag-dk-ftotal"><b>' +
-      tmUnitHtml(tmFmtTok(total)) +
-      '</b><span class="ag-dk-flbl">总计</span></div>' +
-      '<span class="ag-dk-fbadge' +
-      badgeCls +
-      '">缓存读 <b>' +
-      tmUnitHtml(tmFmtPct(hit)) +
-      '</b></span>' +
-      '</div>' +
       '<div class="ag-dk-fstage">' +
       '<svg class="ag-dk-fsvg" width="' +
       svgW +
@@ -610,6 +598,7 @@
       '</b></span>' +
       '</div>' +
       '<div class="ag-dk-rmeta">' +
+      (subLabel ? tmEsc(subLabel) + ' · ' : '') +
       tmFmtInt(stats.calls) +
       '次 · ' +
       tmFmtShortSec(stats.dur) +
@@ -618,6 +607,121 @@
       '</div>' +
       '</div>'
     );
+  }
+
+  const CTX_BREAKDOWN_CLS = {
+    msg: 'ag-c-ctx-msg',
+    mcp: 'ag-c-ctx-mcp',
+    tools: 'ag-c-ctx-tools',
+    sys: 'ag-c-ctx-sys',
+    cfg: 'ag-c-ctx-cfg'
+  };
+
+  function tmCtxBreakdownBar(groups, bTotal, used, limit) {
+    let html = '<div class="ag-mp-bar ag-dk-cbar">';
+    if (bTotal > 0 && limit > 0) {
+      const fillPct = tmClamp((used > 0 ? used : bTotal) / limit, 0, 1) * 100;
+      for (let i = 0; i < groups.length; i++) {
+        const g = groups[i];
+        const tok = Math.max(0, tmNum(g.tokens));
+        if (tok <= 0) continue;
+        const w = Math.max(0.6, (tok / bTotal) * fillPct);
+        const cls = CTX_BREAKDOWN_CLS[g.key] || 'ag-c-ctx-cfg';
+        html +=
+          '<i class="' +
+          cls +
+          '" data-ag-ctx-seg="' +
+          tmEsc(g.key) +
+          '" style="width:' +
+          w.toFixed(2) +
+          '%"></i>';
+      }
+    }
+    return html + '</div>';
+  }
+
+  function tmCtxBreakdownList(groups, bTotal, used, limit, expandedKey) {
+    if (!groups.length || bTotal <= 0) return '';
+    const scale = limit > 0 ? ((used > 0 ? used : bTotal) / limit) * 100 : 100;
+    const rows = groups
+      .map((g) => {
+        const tok = Math.max(0, tmNum(g.tokens));
+        if (tok <= 0) return '';
+        const key = String(g.key || '');
+        const cls = CTX_BREAKDOWN_CLS[key] || 'ag-c-ctx-cfg';
+        const items = Array.isArray(g.items) ? g.items : [];
+        const canExpand = Boolean(g.expandable && items.length > 0);
+        const isOpen = canExpand && expandedKey === key;
+        const pct = (tok / bTotal) * scale;
+        const pctText = pct > 0 && pct < 0.1 ? '<0.1%' : tmFmtPct(pct);
+        const tag = canExpand ? 'button' : 'div';
+        const openAttrs = canExpand
+          ? ' type="button" data-ag-ctx-toggle="' + tmEsc(key) + '" aria-expanded="' + (isOpen ? 'true' : 'false') + '"'
+          : '';
+        const countHtml =
+          isOpen && tmNum(g.count) > 0
+            ? '<span class="ag-dk-ccnt">' + tmFmtInt(g.count) + '</span>'
+            : '';
+
+        let subHtml = '';
+        if (isOpen) {
+          subHtml =
+            '<div class="ag-dk-csub" data-ag-ctx-sub="' +
+            tmEsc(key) +
+            '">' +
+            items
+              .map((it) => {
+                const cnt = tmNum(it.count) > 1 ? '<span class="ag-dk-cscnt"> (' + tmFmtInt(it.count) + ')</span>' : '';
+                return (
+                  '<div class="ag-dk-csrow">' +
+                  '<span class="ag-dk-csname" title="' +
+                  tmEsc(it.name) +
+                  '">' +
+                  tmEsc(it.name) +
+                  cnt +
+                  '</span>' +
+                  '<span class="ag-dk-csval">' +
+                  tmUnitHtml(tmFmtTok(it.tokens)) +
+                  '</span>' +
+                  '</div>'
+                );
+              })
+              .join('') +
+            '</div>';
+        }
+
+        return (
+          '<div class="ag-dk-cgrp">' +
+          '<' +
+          tag +
+          openAttrs +
+          ' class="ag-dk-crow' +
+          (canExpand ? ' is-exp' : '') +
+          (isOpen ? ' is-open' : '') +
+          '" data-ag-ctx-key="' +
+          tmEsc(key) +
+          '">' +
+          '<span class="ag-dk-cleft"><i class="ag-dk-csq ' +
+          cls +
+          '"></i><span class="ag-dk-cname">' +
+          tmEsc(g.label) +
+          '</span>' +
+          countHtml +
+          '</span>' +
+          '<span class="ag-dk-cright"><span class="ag-dk-ctok">' +
+          tmUnitHtml(tmFmtTok(tok)) +
+          '</span><span class="ag-dk-cshare">' +
+          pctText +
+          '</span></span>' +
+          '</' +
+          tag +
+          '>' +
+          subHtml +
+          '</div>'
+        );
+      })
+      .join('');
+    return '<div class="ag-dk-cbreak">' + rows + '</div>';
   }
 
   function renderDockBody(view, state) {
@@ -645,7 +749,9 @@
 
     const turnSegs = tmTurnSegmentsFromHistory(hist, tmNum(turn.index));
     const hasTurnAxis = turnSegs.length > 0 && turnSegs.some((s) => s.turn > 0);
-    const turnAxisHtml = hasTurnAxis ? '<div class="ag-dk-taxis" id="ag-dock-turn-axis" data-ag-taxis="1"></div>' : '';
+    const turnAxisHtml = hasTurnAxis
+      ? '<div class="ag-dk-taxis-wrap" id="ag-dock-taxis-wrap"><div class="ag-dk-taxis" id="ag-dock-turn-axis" data-ag-taxis="1"></div></div>'
+      : '';
 
     const turnFresh = tmNum(turn.in);
     const turnCr = tmNum(turn.cr);
@@ -678,44 +784,52 @@
     const activeStats = distScope === 'turn' ? turnStats : sessStats;
     const activeSub = distScope === 'turn' ? turnSub : sessSub;
     const activeErrors = distScope === 'turn' ? 0 : tmNum(sess.errors);
-    const quietCls = ctx.compacted ? ' is-cp' : level === 'warn' || level === 'crit' ? ' is-warn' : '';
-    const showPeak = tmNum(ctx.peak) > tmNum(ctx.used) || tmNum(ctx.compactions) > 0;
-    const peakHtml = showPeak
-      ? '<span data-ag-tip="ctx-limit">峰值 ' +
-        tmFmtTok(ctx.peak) +
-        (ctx.compactions > 0 ? ' · 压 ' + tmFmtInt(ctx.compactions) : '') +
-        '</span>'
-      : '';
+    const activeTotal = tmNum(activeStats.cr) + tmNum(activeStats.fresh) + tmNum(activeStats.think) + tmNum(activeStats.resp);
+    const activeHit = tmNum(activeStats.prompt) > 0 ? (tmNum(activeStats.cr) / tmNum(activeStats.prompt)) * 100 : tmNum(activeStats.hit);
+    const activeBadgeCls = activeHit >= 85 ? ' is-good' : tmNum(activeStats.prompt) > 0 && activeHit < 30 ? ' is-warn' : '';
+
+    const breakdown = !ctx.compacted && Array.isArray(ctx.breakdown) ? ctx.breakdown.filter((g) => g && tmNum(g.tokens) > 0) : [];
+    const breakdownTotal = tmNum(ctx.breakdownTotal) || breakdown.reduce((a, g) => a + Math.max(0, tmNum(g.tokens)), 0);
+    const ctxExpanded = typeof st.ctxExpanded === 'string' ? st.ctxExpanded : '';
+    const ctxBarHtml =
+      breakdown.length > 0
+        ? tmCtxBreakdownBar(breakdown, breakdownTotal, tmNum(ctx.used), limit)
+        : tmStackBar(
+            ctx.compacted ? [['ag-c-compacted', ctx.used]] : [['ag-c-cache', ctx.cached], ['ag-c-fresh', ctx.fresh]],
+            limit,
+            'ag-dk-cbar'
+          );
+    const ctxNoteHtml =
+      ctx.compacting || ctx.compacted
+        ? '<div class="ag-dk-cquiet"><span class="is-cp">' +
+          tmEsc(ctx.compacting ? '正在压缩上下文…' : '已压缩，下一次调用后刷新') +
+          '</span></div>'
+        : '';
 
     return (
       '<section class="ag-dk-sec ag-dk-sec-ctx" data-ag-sec="ctx" data-level="' +
       level +
       '">' +
-      '<div class="ag-dk-hd"><span class="ag-dk-t">上下文</span></div>' +
       '<div class="ag-dk-chero">' +
+      '<div class="ag-dk-chead">' +
+      '<span class="ag-dk-t">' +
+      (ctx.compacted ? '上下文' : '上下文已用') +
+      '</span>' +
       (ctx.compacted
         ? '<div class="ag-dk-cpct is-cp">已压缩</div>'
         : '<div class="ag-dk-cpct">' + tmUnitHtml(tmFmtPct(ctx.pct)) + '</div>') +
+      '</div>' +
       '<div class="ag-dk-cratio" data-ag-tip="ctx-limit"><b>' +
       tmUnitHtml(tmFmtTok(ctx.used)) +
       '</b> / ' +
       tmUnitHtml(tmFmtTok(limit)) +
       '</div></div>' +
       '<div class="ag-dk-bwrap" data-ag-tip="ctx-bar">' +
-      tmStackBar(
-        ctx.compacted ? [['ag-c-compacted', ctx.used]] : [['ag-c-cache', ctx.cached], ['ag-c-fresh', ctx.fresh]],
-        limit,
-        'ag-dk-cbar'
-      ) +
+      ctxBarHtml +
       marks +
       '</div>' +
-      '<div class="ag-dk-cquiet"><span class="' +
-      quietCls +
-      '" data-ag-tip="ctx-growth">' +
-      tmEsc(tmCompactOutlook(ctx)) +
-      '</span>' +
-      peakHtml +
-      '</div>' +
+      ctxNoteHtml +
+      tmCtxBreakdownList(breakdown, breakdownTotal, tmNum(ctx.used), limit, ctxExpanded) +
       '</section>' +
       '<section class="ag-dk-sec ag-dk-sec-tl" data-ag-sec="timeline">' +
       '<div class="ag-dk-hd"><span class="ag-dk-twrap"><span class="ag-dk-t">步进时间线</span>' +
@@ -733,13 +847,21 @@
       '</div></div>' +
       '<div class="ag-dk-tlscroll" id="ag-dock-tl-scroll">' +
       '<div class="ag-dk-cbox" id="ag-dock-chart-box"></div>' +
-      turnAxisHtml +
       '</div>' +
       '<div class="ag-dk-tlbar" id="ag-dock-tl-bar" hidden><i class="ag-dk-tlthumb"></i></div>' +
+      turnAxisHtml +
       '</section>' +
       '<section class="ag-dk-sec ag-dk-sec-dist" data-ag-sec="dist">' +
-      '<div class="ag-dk-hd"><span class="ag-dk-twrap"><span class="ag-dk-t">累计分布</span>' +
-      (activeSub ? '<span class="ag-dk-rsub">' + tmEsc(activeSub) + '</span>' : '') +
+      '<div class="ag-dk-hd ag-dk-dist-hd"><span class="ag-dk-dist-sum">' +
+      '<span class="ag-dk-t">累计</span>' +
+      '<b class="ag-dk-dtot">' +
+      tmUnitHtml(tmFmtTok(activeTotal)) +
+      '</b>' +
+      '<span class="ag-dk-fbadge' +
+      activeBadgeCls +
+      '">缓存 <b>' +
+      tmUnitHtml(tmFmtPct(activeHit)) +
+      '</b></span>' +
       '</span><div class="ag-dk-pills" data-ag-distscope="1">' +
       '<button type="button" data-scope="turn"' +
       (distScope === 'turn' ? ' class="is-active"' : '') +
@@ -748,7 +870,7 @@
       (distScope === 'session' ? ' class="is-active"' : '') +
       '>整场</button>' +
       '</div></div>' +
-      tmFlowDistHtml(distScope, activeStats, activeErrors) +
+      tmFlowDistHtml(distScope, activeStats, activeErrors, activeSub) +
       '</section>'
     );
   }

@@ -286,3 +286,108 @@ func TestSourceRewind(t *testing.T) {
 		t.Errorf("after rewind = %s, turn %+v", describe(rewound), rewound.View.Turn)
 	}
 }
+
+func TestSourceContextBreakdownFromGeneratorMetadata(t *testing.T) {
+	f := newFakeLS(t, testCid)
+	g := call{in: 2000, cacheRead: 28000, out: 300, maxCtx: 512000, steps: []int{3}, ttft: "0.8s", stream: "1s"}.json()
+	cwm := g["chatModel"].(map[string]any)["chatStartMetadata"].(map[string]any)["contextWindowMetadata"].(map[string]any)
+	cwm["tokenBreakdown"] = map[string]any{
+		"totalTokens": 30000,
+		"groups": []any{
+			map[string]any{"name": "System Prompt", "type": "TOKEN_TYPE_SYSTEM_PROMPT", "numTokens": 4000},
+			map[string]any{"name": "Skills", "type": "TOKEN_TYPE_SKILLS", "numTokens": 2500},
+			map[string]any{"name": "Rules", "type": "TOKEN_TYPE_RULES", "numTokens": 1000},
+			map[string]any{
+				"name": "Tools", "type": "TOKEN_TYPE_TOOLS", "numTokens": 6500,
+				"children": []any{
+					map[string]any{"name": "swarm", "numTokens": 1800},
+					map[string]any{"name": "read_file", "numTokens": 700},
+					map[string]any{"name": "mcp_chrome_snapshot", "numTokens": 4000},
+				},
+			},
+			map[string]any{
+				"name": "Chat Messages", "type": "TOKEN_TYPE_CHAT_MESSAGES", "numTokens": 16000,
+				"children": []any{
+					map[string]any{"name": "0: USER_INPUT", "numTokens": 200},
+					map[string]any{"name": "1: GENERIC", "numTokens": 9800},
+					map[string]any{"name": "2: GENERIC", "numTokens": 4500},
+					map[string]any{"name": "3: PLANNER_RESPONSE", "numTokens": 1500},
+				},
+			},
+		},
+	}
+	f.gens = []map[string]any{g}
+
+	s1 := step(1, "VIEW_FILE", "DONE")
+	s1Meta := s1["metadata"].(map[string]any)
+	s1Meta["toolCall"] = map[string]any{"name": "read_file"}
+	s1Meta["toolSource"] = "CORTEX_COMPONENT_SOURCE_BUILTIN"
+
+	s2 := step(2, "GENERIC", "DONE")
+	s2Meta := s2["metadata"].(map[string]any)
+	s2Meta["toolCall"] = map[string]any{"name": "mcp_chrome_snapshot"}
+	s2Meta["toolSource"] = "CORTEX_COMPONENT_SOURCE_MCP"
+
+	f.steps = []map[string]any{
+		step(0, "USER_INPUT", "DONE"),
+		s1,
+		s2,
+		step(3, "PLANNER_RESPONSE", "DONE"),
+	}
+
+	src, _ := follow(t, f)
+	p := payloadWhen(t, src, testCid, hasData)
+	bd := p.View.Ctx.Breakdown
+	if len(bd) != 5 {
+		t.Fatalf("expected 5 groups (msg/mcp/tools/sys/cfg), got %+v", bd)
+	}
+	if bd[0].Key != "msg" || bd[0].Tokens != 16000 || !bd[0].Expandable || len(bd[0].Items) != 4 {
+		t.Fatalf("unexpected msg group: %+v", bd[0])
+	}
+	if bd[0].Items[0].Name != "read_file · 读取文件" || bd[0].Items[0].Tokens != 9800 {
+		t.Errorf("expected GENERIC step resolved via toolCall to read_file first: %+v", bd[0].Items)
+	}
+	if bd[0].Items[1].Name != "MCP · mcp_chrome_snapshot" || bd[0].Items[1].Tokens != 4500 {
+		t.Errorf("expected MCP chat tool resolved second: %+v", bd[0].Items)
+	}
+	if bd[1].Key != "mcp" || bd[1].Tokens != 4000 || !bd[1].Expandable || len(bd[1].Items) != 1 {
+		t.Errorf("expected MCP tool split out of Tools: %+v", bd[1])
+	}
+	if bd[2].Key != "tools" || bd[2].Tokens != 2500 || !bd[2].Expandable || len(bd[2].Items) != 2 || bd[2].Items[0].Name != "swarm" {
+		t.Errorf("expected builtin tools kept sorted without truncation: %+v", bd[2])
+	}
+	if bd[3].Key != "sys" || bd[3].Tokens != 4000 || bd[3].Expandable {
+		t.Errorf("expected non-expandable system prompt group: %+v", bd[3])
+	}
+	if bd[4].Key != "cfg" || bd[4].Tokens != 3500 || !bd[4].Expandable || len(bd[4].Items) != 2 || bd[4].Items[0].Name != "Skills" {
+		t.Errorf("expected Skills + Rules merged into cfg group: %+v", bd[4])
+	}
+}
+
+func TestSourceContextBreakdownFallsBackToStream(t *testing.T) {
+	f := newFakeLS(t, testCid)
+	f.gens = []map[string]any{call{in: 1000, cacheRead: 19000, out: 100, maxCtx: 512000, steps: []int{1}, ttft: "0.5s", stream: "1s"}.json()}
+	f.steps = []map[string]any{step(0, "USER_INPUT", "DONE"), step(1, "PLANNER_RESPONSE", "DONE")}
+	src, _ := follow(t, f)
+	_ = payloadWhen(t, src, testCid, hasData)
+
+	f.change(func(*fakeLS) {}, map[string]any{
+		"contextWindowUsage": map[string]any{
+			"estimatedTokensUsed": 20000,
+			"tokenGroups": []any{
+				map[string]any{"name": "Chat Messages", "type": "TOKEN_TYPE_CHAT_MESSAGES", "numTokens": 12000},
+				map[string]any{"name": "Tools", "type": "TOKEN_TYPE_TOOLS", "numTokens": 5000},
+				map[string]any{"name": "System Prompt", "type": "TOKEN_TYPE_SYSTEM_PROMPT", "numTokens": 3000},
+			},
+		},
+	})
+
+	p := payloadWhen(t, src, testCid, func(p *Payload) bool { return len(p.View.Ctx.Breakdown) == 3 })
+	bd := p.View.Ctx.Breakdown
+	if bd[0].Key != "msg" || bd[0].Tokens != 12000 || bd[0].Expandable {
+		t.Errorf("stream fallback should be non-expandable: %+v", bd[0])
+	}
+	if bd[1].Key != "tools" || bd[1].Tokens != 5000 || bd[2].Key != "sys" || bd[2].Tokens != 3000 {
+		t.Errorf("unexpected stream fallback groups: %+v", bd)
+	}
+}

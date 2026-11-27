@@ -102,13 +102,14 @@ type turnInfo struct {
 }
 
 type convState struct {
-	gens        []GenItem
-	stepBase    int64
-	steps       []stepInfo
-	stepTotal   int64
-	turns       []turnInfo
-	compactedAt []int64
-	retry       *modelRetry
+	gens            []GenItem
+	stepBase        int64
+	steps           []stepInfo
+	stepTotal       int64
+	turns           []turnInfo
+	compactedAt     []int64
+	retry           *modelRetry
+	streamBreakdown *rawTokenBreakdown
 }
 
 func (s *convState) step(idx int64) *stepInfo {
@@ -448,6 +449,7 @@ func buildPayload(cid, sig string, st *convState, cfg ReaderConfig, nowMs float6
 	for i := range turns {
 		turns[i].StartedMs = userStepMs[turns[i].StartStepIdx]
 	}
+	breakdown, breakdownTotal := buildContextBreakdown(st)
 	view := BuildView(viewInput{
 		stepStartMs:     historyStepStartMs(st, valid),
 		valid:           valid,
@@ -463,6 +465,8 @@ func buildPayload(cid, sig string, st *convState, cfg ReaderConfig, nowMs float6
 		compactSummaryK: compactSummaryKb,
 		compactingNow:   compactingNow,
 		cacheMode:       cacheMode,
+		breakdown:       breakdown,
+		breakdownTotal:  breakdownTotal,
 	})
 
 	return &Payload{

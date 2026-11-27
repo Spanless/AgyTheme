@@ -26,22 +26,24 @@ type CallView struct {
 }
 
 type ContextView struct {
-	Used        float64 `json:"used"`
-	Limit       float64 `json:"limit"`
-	LimitSrc    string  `json:"limitSrc"`
-	Pct         float64 `json:"pct"`
-	Level       string  `json:"level"`
-	Remain      float64 `json:"remain"`
-	Cached      float64 `json:"cached"`
-	Fresh       float64 `json:"fresh"`
-	Compacted   bool    `json:"compacted"`
-	SummaryKb   float64 `json:"summaryKb"`
-	Compacting  bool    `json:"compacting"`
-	Compactions int     `json:"compactions"`
-	Peak        float64 `json:"peak"`
-	Growth      float64 `json:"growth"`
-	GrowthN     int     `json:"growthN"`
-	CallsLeft   int     `json:"callsLeft"`
+	Used           float64                 `json:"used"`
+	Limit          float64                 `json:"limit"`
+	LimitSrc       string                  `json:"limitSrc"`
+	Pct            float64                 `json:"pct"`
+	Level          string                  `json:"level"`
+	Remain         float64                 `json:"remain"`
+	Cached         float64                 `json:"cached"`
+	Fresh          float64                 `json:"fresh"`
+	Compacted      bool                    `json:"compacted"`
+	SummaryKb      float64                 `json:"summaryKb"`
+	Compacting     bool                    `json:"compacting"`
+	Compactions    int                     `json:"compactions"`
+	Peak           float64                 `json:"peak"`
+	Growth         float64                 `json:"growth"`
+	GrowthN        int                     `json:"growthN"`
+	CallsLeft      int                     `json:"callsLeft"`
+	Breakdown      []ContextBreakdownGroup `json:"breakdown,omitempty"`
+	BreakdownTotal float64                 `json:"breakdownTotal,omitempty"`
 }
 
 type TurnView struct {
@@ -181,6 +183,8 @@ type viewInput struct {
 	compactingNow   bool
 	cacheMode       string
 	stepStartMs     map[int64]float64
+	breakdown       []ContextBreakdownGroup
+	breakdownTotal  float64
 }
 
 func BuildView(in viewInput) *View {
@@ -244,22 +248,24 @@ func BuildView(in viewInput) *View {
 		}
 	}
 	ctx := ContextView{
-		Used:        used,
-		Limit:       limit,
-		LimitSrc:    in.limitSrc,
-		Pct:         pct,
-		Level:       level,
-		Remain:      math.Max(0, limit-used),
-		Cached:      lastG.CacheRead,
-		Fresh:       lastG.InTok + lastG.CacheWrite,
-		Compacted:   in.compactedPend,
-		SummaryKb:   in.compactSummaryK,
-		Compacting:  in.compactingNow,
-		Compactions: len(in.checkpointIdxs),
-		Peak:        peak,
-		Growth:      round1(growth),
-		GrowthN:     growthN,
-		CallsLeft:   callsLeft,
+		Used:           used,
+		Limit:          limit,
+		LimitSrc:       in.limitSrc,
+		Pct:            pct,
+		Level:          level,
+		Remain:         math.Max(0, limit-used),
+		Cached:         lastG.CacheRead,
+		Fresh:          lastG.InTok + lastG.CacheWrite,
+		Compacted:      in.compactedPend,
+		SummaryKb:      in.compactSummaryK,
+		Compacting:     in.compactingNow,
+		Compactions:    len(in.checkpointIdxs),
+		Peak:           peak,
+		Growth:         round1(growth),
+		GrowthN:        growthN,
+		CallsLeft:      callsLeft,
+		Breakdown:      in.breakdown,
+		BreakdownTotal: in.breakdownTotal,
 	}
 
 	turn := TurnView{Index: len(in.userStepIdxs), Calls: len(in.turnSlice), Steps: in.turnSteps, StartedMs: in.turnStartedMs}

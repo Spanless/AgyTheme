@@ -247,7 +247,7 @@ func (s *Source) followOnce(ctx context.Context, c *conv) (loaded bool, err erro
 			timer = nil
 			if lv.rewound {
 				lv.rewound = false
-				next := &convState{stepTotal: st.stepTotal, turns: slices.Clone(st.turns), compactedAt: slices.Clone(st.compactedAt), retry: st.retry}
+				next := &convState{stepTotal: st.stepTotal, turns: slices.Clone(st.turns), compactedAt: slices.Clone(st.compactedAt), retry: st.retry, streamBreakdown: st.streamBreakdown}
 				if err := s.load(ctx, c.cid, next, &lv); err != nil {
 					return true, err
 				}
@@ -282,8 +282,16 @@ func (s *Source) apply(st *convState, lv *live, u *agentStateUpdate) {
 			lv.gensChanged = true
 		}
 	}
-	if cw := up.ContextWindowUsage; cw != nil && cw.GeneratorMetadataIndex != nil {
-		lv.gensChanged = true
+	if cw := up.ContextWindowUsage; cw != nil {
+		if cw.GeneratorMetadataIndex != nil {
+			lv.gensChanged = true
+		}
+		if len(cw.TokenGroups) > 0 {
+			st.streamBreakdown = &rawTokenBreakdown{
+				Groups: toRawTokenGroups(cw.TokenGroups),
+				Total:  float64(cw.EstimatedTokensUsed),
+			}
+		}
 	}
 	if es := up.ExecutionStatus; es != nil {
 		st.retry = nil
