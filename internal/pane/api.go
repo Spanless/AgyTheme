@@ -3,7 +3,9 @@ package pane
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -21,9 +23,10 @@ import (
 )
 
 type DoctorStatus struct {
-	OK           bool   `json:"ok"`
-	Summary      string `json:"summary"`
-	CdpReachable bool   `json:"cdpReachable"`
+	OK              bool   `json:"ok"`
+	Summary         string `json:"summary"`
+	CdpReachable    bool   `json:"cdpReachable"`
+	PendingRelaunch bool   `json:"pendingRelaunch,omitempty"`
 }
 
 type API struct {
@@ -32,6 +35,7 @@ type API struct {
 	Updater         *updater.Updater
 	OnConfigChanged func()
 	Doctor          func() DoctorStatus
+	Relaunch        func(force bool) (busy bool, err error)
 	OpenDir         func(dir string) error
 	Metrics         func(cid string) (*metrics.Payload, bool)
 	WatchCid        func(cid string)
@@ -145,6 +149,41 @@ func (a *API) handle(w http.ResponseWriter, r *http.Request) bool {
 			st = a.Doctor()
 		}
 		writeJSON(w, http.StatusOK, st)
+		return true
+	case "/api/relaunch":
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", "POST")
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return true
+		}
+		if a.Relaunch == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "重启服务未启用"})
+			return true
+		}
+		var req struct {
+			Force bool `json:"force"`
+		}
+		if r.Body != nil {
+			err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&req)
+			if err != nil && !errors.Is(err, io.EOF) {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求格式无效"})
+				return true
+			}
+		}
+		busy, err := a.Relaunch(req.Force)
+		if busy {
+			msg := "检测到有对话正在运行，再次点击可强制重启"
+			if err != nil {
+				msg = err.Error()
+			}
+			writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "busy": true, "error": msg})
+			return true
+		}
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
+			return true
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "relaunching": true})
 		return true
 	case "/api/metrics":
 		if r.Method != http.MethodGet {

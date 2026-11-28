@@ -229,6 +229,34 @@ body {
   opacity: 0.9;
 }
 
+.ag-set-btn.is-warn {
+  border-color: transparent;
+  background: var(--ag-c-warn);
+  color: #111111;
+}
+
+.ag-set-btn.is-warn:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.ag-set-cdp {
+  padding: 9px 11px;
+}
+
+.ag-set-cdp-title {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ag-tt-ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ag-set-cdp .ag-set-note {
+  white-space: normal;
+  line-height: 1.4;
+}
+
 .ag-set-btn:disabled {
   opacity: 0.55;
   cursor: default;

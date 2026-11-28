@@ -25,6 +25,10 @@
     pollTimer: 0,
     rollbackConfirm: false,
     rollbackTimer: 0,
+    relaunchConfirm: false,
+    relaunchTimer: 0,
+    relaunching: false,
+    relaunchError: '',
     metricsEs: null,
     metricsStreamCid: ''
   };
@@ -58,7 +62,12 @@
     }
     return fetch(path, opts).then(async (res) => {
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error((data && data.error) || '请求失败 (' + res.status + ')');
+      if (!res.ok) {
+        const err = new Error((data && data.error) || '请求失败 (' + res.status + ')');
+        err.status = res.status;
+        err.data = data;
+        throw err;
+      }
       return data;
     });
   }
@@ -134,6 +143,16 @@
       '<button type="button" class="ag-set-sw" data-set-mod="theme" aria-label="主题美化"></button></div>' +
       '<div class="ag-set-row"><span class="ag-set-label">底部用量状态栏<span class="ag-set-tag" data-mod-tag="metrics" style="display:none">未安装</span></span>' +
       '<button type="button" class="ag-set-sw" data-set-mod="metrics" aria-label="底部用量状态栏"></button></div>' +
+      '</div>' +
+      '<div class="ag-set-box ag-set-cdp" id="ag-set-cdp-box" style="display:none">' +
+      '<div class="ag-set-upd-row">' +
+      '<div class="ag-set-upd-left">' +
+      '<i class="ag-set-dot is-warn"></i>' +
+      '<span class="ag-set-cdp-title" id="ag-set-cdp-title">未连接到调试端口</span>' +
+      '</div>' +
+      '<button type="button" class="ag-set-btn is-primary" id="ag-set-relaunch-btn">重启连接</button>' +
+      '</div>' +
+      '<div class="ag-set-note" id="ag-set-cdp-note">中文界面、主题美化与底部状态栏需带调试端口启动</div>' +
       '</div>' +
       '<div class="ag-set-ft">' +
       '<button type="button" class="ag-set-link" id="ag-set-doc-btn"><i class="ag-set-dot" id="ag-set-doc-dot"></i><span id="ag-set-doc-txt">运行正常</span></button>' +
@@ -803,6 +822,8 @@
     if (st.modalOpen) {
       hideHover(true);
       resetRollbackConfirm();
+      resetRelaunchConfirm();
+      st.relaunchError = '';
       loadSettings();
       loadDoctor();
     }
@@ -943,6 +964,50 @@
       docDot.className = 'ag-set-dot' + (st.doctor.ok ? '' : ' is-warn');
       docTxt.textContent = st.doctor.summary || (st.doctor.ok ? '运行正常' : '状态异常');
     }
+
+    const cdpBox = byId('ag-set-cdp-box');
+    const cdpTitle = byId('ag-set-cdp-title');
+    const cdpNote = byId('ag-set-cdp-note');
+    const relaunchBtn = byId('ag-set-relaunch-btn');
+    if (cdpBox && cdpTitle && cdpNote && relaunchBtn) {
+      const disconnected = Boolean(st.doctor && st.doctor.cdpReachable === false);
+      cdpBox.style.display = disconnected ? 'block' : 'none';
+      if (disconnected) {
+        if (st.relaunching) {
+          cdpTitle.textContent = '正在重启 Antigravity';
+          cdpNote.textContent = '客户端重启后将自动连接调试端口并恢复主题与汉化';
+          relaunchBtn.textContent = '重启中…';
+          relaunchBtn.className = 'ag-set-btn';
+          relaunchBtn.disabled = true;
+        } else if (st.relaunchConfirm) {
+          cdpTitle.textContent = '检测到活跃对话';
+          cdpNote.textContent = st.relaunchError || '当前有对话正在运行，再次点击将强制重启 Antigravity';
+          relaunchBtn.textContent = '确认重启？';
+          relaunchBtn.className = 'ag-set-btn is-warn';
+          relaunchBtn.disabled = false;
+        } else if (st.doctor.pendingRelaunch) {
+          cdpTitle.textContent = '等待对话空闲后自动连接';
+          cdpNote.textContent = st.relaunchError || '对话结束后会自动带调试端口重启，也可手动立即重启';
+          relaunchBtn.textContent = '立即重启';
+          relaunchBtn.className = 'ag-set-btn is-primary';
+          relaunchBtn.disabled = false;
+        } else {
+          cdpTitle.textContent = '未连接到调试端口';
+          cdpNote.textContent = st.relaunchError || '中文界面、主题美化与底部状态栏需带调试端口启动';
+          relaunchBtn.textContent = '重启连接';
+          relaunchBtn.className = 'ag-set-btn is-primary';
+          relaunchBtn.disabled = false;
+        }
+      }
+    }
+  }
+
+  function resetRelaunchConfirm() {
+    st.relaunchConfirm = false;
+    if (st.relaunchTimer) {
+      clearTimeout(st.relaunchTimer);
+      st.relaunchTimer = 0;
+    }
   }
 
   function loadSettings() {
@@ -1008,6 +1073,7 @@
     const overlay = byId('ag-settings-overlay');
     const updBtn = byId('ag-set-upd-btn');
     const docBtn = byId('ag-set-doc-btn');
+    const relaunchBtn = byId('ag-set-relaunch-btn');
     const rbBtn = byId('ag-set-rb-btn');
     const dirBtn = byId('ag-set-dir-btn');
 
@@ -1076,6 +1142,39 @@
     });
 
     if (docBtn) docBtn.addEventListener('click', () => loadDoctor());
+
+    if (relaunchBtn) {
+      relaunchBtn.addEventListener('click', () => {
+        if (st.relaunching) return;
+        const force = st.relaunchConfirm;
+        resetRelaunchConfirm();
+        st.relaunching = true;
+        st.relaunchError = '';
+        renderSettingsModal();
+        apiFetch('/api/relaunch', 'POST', force ? { force: true } : {})
+          .then(() => {
+            setTimeout(() => {
+              st.relaunching = false;
+              loadDoctor();
+            }, 8000);
+          })
+          .catch((err) => {
+            st.relaunching = false;
+            if (err && err.data && err.data.busy) {
+              st.relaunchConfirm = true;
+              st.relaunchError = err.message || '';
+              renderSettingsModal();
+              st.relaunchTimer = setTimeout(() => {
+                resetRelaunchConfirm();
+                renderSettingsModal();
+              }, 4500);
+              return;
+            }
+            st.relaunchError = (err && err.message) || '重启失败';
+            renderSettingsModal();
+          });
+      });
+    }
 
     if (rbBtn) {
       rbBtn.addEventListener('click', () => {

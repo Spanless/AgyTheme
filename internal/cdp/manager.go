@@ -171,6 +171,17 @@ func (m *Manager) ConfigureRelaunch(spawn func(HostProc) error, pendingFile stri
 	m.relaunch.MinColdStartWindowSec = minColdStartWindowSec
 }
 
+func (m *Manager) HasPendingRelaunch() bool {
+	return m.relaunch != nil && m.relaunch.HasPending()
+}
+
+func (m *Manager) RelaunchHost(force bool) (bool, error) {
+	if m.relaunch == nil {
+		return false, fmt.Errorf("重启控制器未初始化")
+	}
+	return m.relaunch.RelaunchNow(m.bundle.Config(), force)
+}
+
 func NewManager(b *bundle.Controller, ls *metrics.LSClient, runOnce, safeMode bool) *Manager {
 	rc := NewRelaunchController()
 	rc.SelfExecutable = shared.SelfExecutable()

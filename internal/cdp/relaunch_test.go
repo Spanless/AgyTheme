@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/Spanless/AgyTheme/internal/bundle"
 )
 
 func TestEvaluateColdStartDecision(t *testing.T) {
@@ -27,8 +29,11 @@ func TestEvaluateColdStartDecision(t *testing.T) {
 	if got := d(HostProc{Pid: 104, ElapsedSec: 18, HasUpdatedFlag: true}, false, false, RelaunchGuard{}); got != (Decision{Action: "relaunch", Reason: "cold-start-post-update"}) {
 		t.Errorf("post update: %+v", got)
 	}
-	if got := d(HostProc{Pid: 105, ElapsedSec: 4}, false, true, RelaunchGuard{}); got.Reason != "active-wal-write" {
+	if got := d(HostProc{Pid: 105, ElapsedSec: 4}, false, true, RelaunchGuard{}); got != (Decision{Action: "defer", Reason: "active-wal-write"}) {
 		t.Errorf("wal: %+v", got)
+	}
+	if got := d(HostProc{Pid: 105, ElapsedSec: 4}, false, true, RelaunchGuard{HandledPids: []int{105}}); got.Action != "exempt" || got.Reason != "cooldown-active" {
+		t.Errorf("wal with cooldown: %+v", got)
 	}
 	if got := d(HostProc{Pid: 106, ElapsedSec: 4}, false, false, RelaunchGuard{LastRelaunchAtMs: now - 15000}); got.Action != "relaunch" {
 		t.Errorf("single recent relaunch: %+v", got)
@@ -153,5 +158,129 @@ func TestSidecarColdStartWindow(t *testing.T) {
 	proc.ElapsedSec = 90
 	if d := evaluateColdStart(proc, false, false, RelaunchGuard{}, 1e12, false, 40); d.Action != "exempt" {
 		t.Fatalf("past sidecar window: got %+v, want exempt", d)
+	}
+}
+
+func TestColdStartActiveWalDefersAndRelaunchesWhenIdle(t *testing.T) {
+	tmp := t.TempDir()
+	origGuard := RelaunchGuardFile
+	RelaunchGuardFile = filepath.Join(tmp, "guard.json")
+	t.Cleanup(func() { RelaunchGuardFile = origGuard })
+
+	convDir := filepath.Join(tmp, "conversations")
+	if err := os.MkdirAll(convDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	walPath := filepath.Join(convDir, "turn.db-wal")
+	if err := os.WriteFile(walPath, make([]byte, 8192), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	pendingPath := filepath.Join(tmp, "pending-activation.json")
+	spawned := 0
+	rc := NewRelaunchController()
+	rc.PendingFile = pendingPath
+	rc.MinColdStartWindowSec = 40
+	rc.Probe = func(string, []bundle.Endpoint) []HostProc {
+		return []HostProc{{Pid: 7323, Channel: "stable", ElapsedSec: 5, AppPath: "/Applications/Antigravity.app"}}
+	}
+	rc.Spawn = func(HostProc) error {
+		spawned++
+		return nil
+	}
+	cfg := bundle.ActiveConfig{
+		Enabled: true,
+		Channel: "stable",
+		Endpoints: []bundle.Endpoint{{
+			Channel:          "stable",
+			PortFile:         filepath.Join(tmp, "DevToolsActivePort"),
+			ConversationsDir: convDir,
+		}},
+	}
+
+	// Active WAL during cold start defers instead of permanently exempting the PID.
+	if rc.MaybeAutoRelaunch(cfg, false, false) {
+		t.Fatal("must not relaunch while WAL is active")
+	}
+	if spawned != 0 {
+		t.Fatalf("spawned=%d while WAL active, want 0", spawned)
+	}
+	if !rc.HasPending() {
+		t.Fatal("expected pending activation marker after active-wal deferral")
+	}
+
+	// Still active: remains deferred without relaunching.
+	if rc.MaybeAutoRelaunch(cfg, false, false) {
+		t.Fatal("must stay deferred while WAL is still fresh")
+	}
+	if spawned != 0 {
+		t.Fatalf("spawned=%d while still busy, want 0", spawned)
+	}
+
+	// Age the WAL past the idle window: deferred cold-start now relaunches the host.
+	stale := time.Now().Add(-(PendingIdleWindow + 5*time.Second))
+	if err := os.Chtimes(walPath, stale, stale); err != nil {
+		t.Fatal(err)
+	}
+	if !rc.MaybeAutoRelaunch(cfg, false, false) {
+		t.Fatal("expected deferred relaunch to fire once WAL became idle")
+	}
+	if spawned != 1 {
+		t.Fatalf("spawned=%d after idle, want 1", spawned)
+	}
+	if rc.HasPending() {
+		t.Fatal("pending marker must be cleared after relaunch")
+	}
+}
+
+func TestRelaunchNowChecksBusyAndHonorsForce(t *testing.T) {
+	tmp := t.TempDir()
+	origGuard := RelaunchGuardFile
+	RelaunchGuardFile = filepath.Join(tmp, "guard.json")
+	t.Cleanup(func() { RelaunchGuardFile = origGuard })
+
+	convDir := filepath.Join(tmp, "conversations")
+	if err := os.MkdirAll(convDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	walPath := filepath.Join(convDir, "turn.db-wal")
+	if err := os.WriteFile(walPath, make([]byte, 8192), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	spawned := 0
+	rc := NewRelaunchController()
+	rc.PendingFile = filepath.Join(tmp, "pending-activation.json")
+	rc.Probe = func(string, []bundle.Endpoint) []HostProc {
+		return []HostProc{{Pid: 8001, Channel: "stable", ElapsedSec: 120, AppPath: "/Applications/Antigravity.app"}}
+	}
+	rc.Spawn = func(HostProc) error {
+		spawned++
+		return nil
+	}
+	cfg := bundle.ActiveConfig{
+		Enabled: true,
+		Channel: "stable",
+		Endpoints: []bundle.Endpoint{{
+			Channel:          "stable",
+			PortFile:         filepath.Join(tmp, "DevToolsActivePort"),
+			ConversationsDir: convDir,
+		}},
+	}
+
+	busy, err := rc.RelaunchNow(cfg, false)
+	if !busy || err == nil {
+		t.Fatalf("expected busy=true and error when WAL active, got busy=%v err=%v", busy, err)
+	}
+	if spawned != 0 {
+		t.Fatalf("spawned=%d on busy refusal, want 0", spawned)
+	}
+
+	busy, err = rc.RelaunchNow(cfg, true)
+	if busy || err != nil {
+		t.Fatalf("expected forced relaunch to succeed, got busy=%v err=%v", busy, err)
+	}
+	if spawned != 1 {
+		t.Fatalf("spawned=%d after force relaunch, want 1", spawned)
 	}
 }

@@ -171,7 +171,16 @@ func Run(opts Options) {
 				if attached > 0 {
 					return pane.DoctorStatus{OK: true, Summary: "运行正常 · CDP 已连接", CdpReachable: true}
 				}
+				if mgr != nil && mgr.HasPendingRelaunch() {
+					return pane.DoctorStatus{OK: false, Summary: "等待对话空闲后自动连接", CdpReachable: false, PendingRelaunch: true}
+				}
 				return pane.DoctorStatus{OK: false, Summary: "未连接到 Antigravity 调试端口", CdpReachable: false}
+			},
+			Relaunch: func(force bool) (bool, error) {
+				if mgr == nil {
+					return false, fmt.Errorf("服务尚未就绪")
+				}
+				return mgr.RelaunchHost(force)
 			},
 			Metrics: func(cid string) (*metrics.Payload, bool) {
 				if mgr == nil {

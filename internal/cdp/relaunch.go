@@ -70,6 +70,15 @@ func EvaluateColdStartDecision(proc *HostProc, hasActivePort, hasActiveWal bool,
 	return evaluateColdStart(proc, hasActivePort, hasActiveWal, guard, nowMs, isIgnored, 0)
 }
 
+func isCooldownActive(pid int, guard RelaunchGuard, nowMs float64) bool {
+	for _, p := range guard.HandledPids {
+		if p != 0 && p == pid {
+			return true
+		}
+	}
+	return recentRelaunches(guard, nowMs) >= MaxRelaunchesPerWindow
+}
+
 func evaluateColdStart(proc *HostProc, hasActivePort, hasActiveWal bool, guard RelaunchGuard, nowMs float64, isIgnored bool, minWindowSec float64) Decision {
 	if proc == nil || proc.HasCdpFlag || isIgnored || hasActivePort {
 		return Decision{Action: "skip", Reason: "already-ready-or-ignored"}
@@ -84,17 +93,11 @@ func evaluateColdStart(proc *HostProc, hasActivePort, hasActiveWal bool, guard R
 	if math.IsNaN(proc.ElapsedSec) || math.IsInf(proc.ElapsedSec, 0) || proc.ElapsedSec > maxWindow {
 		return Decision{Action: "exempt", Reason: "uptime-exceeded", MaxWindowSec: maxWindow}
 	}
-	if hasActiveWal {
-		return Decision{Action: "exempt", Reason: "active-wal-write"}
-	}
-	handled := false
-	for _, p := range guard.HandledPids {
-		if p != 0 && p == proc.Pid {
-			handled = true
-		}
-	}
-	if handled || recentRelaunches(guard, nowMs) >= MaxRelaunchesPerWindow {
+	if isCooldownActive(proc.Pid, guard, nowMs) {
 		return Decision{Action: "exempt", Reason: "cooldown-active", DeltaMs: nowMs - guard.LastRelaunchAtMs}
+	}
+	if hasActiveWal {
+		return Decision{Action: "defer", Reason: "active-wal-write"}
 	}
 	reason := "cold-start-unflagged"
 	if proc.HasUpdatedFlag {
@@ -309,14 +312,16 @@ type RelaunchController struct {
 	SelfExecutable string
 	// Quitting Antigravity terminates its sidecar, so sidecar relaunches must run in a detached helper.
 	Spawn                 func(proc HostProc) error
+	Probe                 func(channelMode string, eps []bundle.Endpoint) []HostProc
 	PendingFile           string
 	MinColdStartWindowSec float64
 }
 
-// Post-install activation waits for conversation idle when relaunching mid-turn is unsafe.
+// Post-install activation and cold-start WAL deferral wait for conversation idle before relaunching.
 type PendingActivation struct {
 	CreatedAtMs float64 `json:"createdAtMs"`
 	Reason      string  `json:"reason,omitempty"`
+	Pid         int     `json:"pid,omitempty"`
 }
 
 const (
@@ -326,7 +331,11 @@ const (
 )
 
 func WritePendingActivation(path, reason string) error {
-	pa := PendingActivation{CreatedAtMs: float64(time.Now().UnixMilli()), Reason: reason}
+	return WritePendingActivationForPid(path, reason, 0)
+}
+
+func WritePendingActivationForPid(path, reason string, pid int) error {
+	pa := PendingActivation{CreatedAtMs: float64(time.Now().UnixMilli()), Reason: reason, Pid: pid}
 	data, err := json.MarshalIndent(pa, "", "  ")
 	if err != nil {
 		return err
@@ -353,6 +362,18 @@ func (r *RelaunchController) ClearPending() {
 	if r.PendingFile != "" && shared.FileExists(r.PendingFile) {
 		_ = os.Remove(r.PendingFile)
 	}
+}
+
+func (r *RelaunchController) HasPending() bool {
+	_, ok := ReadPendingActivation(r.PendingFile, time.Now())
+	return ok
+}
+
+func (r *RelaunchController) listProcs(channelMode string, eps []bundle.Endpoint) []HostProc {
+	if r.Probe != nil {
+		return r.Probe(channelMode, eps)
+	}
+	return r.probe(channelMode, eps)
 }
 
 func RelaunchHost(proc HostProc) error {
@@ -502,7 +523,7 @@ func (r *RelaunchController) MaybeAutoRelaunch(cfg bundle.ActiveConfig, safeMode
 		return false
 	}
 	r.prune()
-	procs := r.probe(cfg.Channel, cfg.Endpoints)
+	procs := r.listProcs(cfg.Channel, cfg.Endpoints)
 	for i := range procs {
 		proc := procs[i]
 		ep := findEndpoint(cfg.Endpoints, proc.Channel)
@@ -519,14 +540,32 @@ func (r *RelaunchController) MaybeAutoRelaunch(cfg bundle.ActiveConfig, safeMode
 
 		if !hasPort && !proc.HasCdpFlag {
 			if pa, ok := ReadPendingActivation(r.PendingFile, now); ok {
-				if now.Sub(time.UnixMilli(int64(pa.CreatedAtMs))) < pendingMinAge || HasActiveConversationWalWrite(convDir, PendingIdleWindow) {
+				if pa.Pid != 0 && pa.Pid != proc.Pid {
+					_ = os.Remove(r.PendingFile)
+				} else {
+					minAge := pendingMinAge
+					if pa.Reason == "cold-start-active-wal" {
+						minAge = 0
+					}
+					if now.Sub(time.UnixMilli(int64(pa.CreatedAtMs))) < minAge || HasActiveConversationWalWrite(convDir, PendingIdleWindow) {
+						continue
+					}
+					if isCooldownActive(proc.Pid, guard, float64(now.UnixMilli())) {
+						_ = os.Remove(r.PendingFile)
+						r.ignored[proc.Pid] = true
+						r.exemptByChan[proc.Channel] = proc.Pid
+						continue
+					}
+					_ = os.Remove(r.PendingFile)
+					reason := pa.Reason
+					if reason == "" {
+						reason = "post-install-activation"
+					}
+					if r.relaunchProc(proc, reason, guard, now) == nil {
+						return true
+					}
 					continue
 				}
-				_ = os.Remove(r.PendingFile)
-				if r.relaunchProc(proc, "post-install-activation", guard, now) {
-					return true
-				}
-				continue
 			}
 		}
 
@@ -536,6 +575,18 @@ func (r *RelaunchController) MaybeAutoRelaunch(cfg bundle.ActiveConfig, safeMode
 		}
 		d := evaluateColdStart(&proc, hasPort, hasWal, guard, float64(now.UnixMilli()), r.ignored[proc.Pid], r.MinColdStartWindowSec)
 		if d.Action == "skip" {
+			continue
+		}
+		if d.Action == "defer" {
+			if r.PendingFile != "" {
+				if err := WritePendingActivationForPid(r.PendingFile, "cold-start-active-wal", proc.Pid); err == nil {
+					fmt.Printf("[Daemon] Deferred cold-start auto-relaunch for PID %d: active conversation WAL write within 15s; will retry once idle.\n", proc.Pid)
+					continue
+				}
+			}
+			r.ignored[proc.Pid] = true
+			r.exemptByChan[proc.Channel] = proc.Pid
+			fmt.Printf("[Daemon] Skipped cold-start auto-relaunch for PID %d: active conversation WAL write within 15s.\n", proc.Pid)
 			continue
 		}
 		if d.Action == "exempt" {
@@ -549,21 +600,59 @@ func (r *RelaunchController) MaybeAutoRelaunch(cfg bundle.ActiveConfig, safeMode
 				}
 				fmt.Printf("[Daemon] Detected running Antigravity (%s, PID %d, uptime %ss) without --remote-debugging-port; skipping auto-relaunch to protect active session. Run `%s relaunch` when idle.\n",
 					proc.Channel, proc.Pid, shared.FormatJSNumber(proc.ElapsedSec), hint)
-			case "active-wal-write":
-				fmt.Printf("[Daemon] Skipped cold-start auto-relaunch for PID %d: active conversation WAL write within 15s.\n", proc.Pid)
 			case "cooldown-active":
 				fmt.Printf("[Daemon] Skipped cold-start auto-relaunch for PID %d: %d relaunches in the last %ds.\n", proc.Pid, MaxRelaunchesPerWindow, int(RelaunchWindowMs/1000))
 			}
 			continue
 		}
-		if r.relaunchProc(proc, d.Reason, guard, now) {
+		if r.relaunchProc(proc, d.Reason, guard, now) == nil {
 			return true
 		}
 	}
 	return false
 }
 
-func (r *RelaunchController) relaunchProc(proc HostProc, reason string, guard RelaunchGuard, now time.Time) bool {
+func (r *RelaunchController) RelaunchNow(cfg bundle.ActiveConfig, force bool) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.relaunching {
+		return false, fmt.Errorf("正在重启 Antigravity，请稍候")
+	}
+	r.prune()
+	procs := r.listProcs(cfg.Channel, cfg.Endpoints)
+	if len(procs) == 0 {
+		return false, fmt.Errorf("未检测到运行中的 Antigravity 进程")
+	}
+	var target *HostProc
+	var targetEp *bundle.Endpoint
+	for i := range procs {
+		p := &procs[i]
+		ep := findEndpoint(cfg.Endpoints, p.Channel)
+		if ep == nil && len(cfg.Endpoints) > 0 {
+			ep = &cfg.Endpoints[0]
+		}
+		hasPort := ep != nil && shared.ReadPortFromFile(ep.PortFile) > 0
+		if !hasPort && !p.HasCdpFlag {
+			target = p
+			targetEp = ep
+			break
+		}
+	}
+	if target == nil {
+		return false, fmt.Errorf("Antigravity 调试端口已就绪，请稍候自动重连")
+	}
+	if !force && targetEp != nil && HasActiveConversationWalWrite(targetEp.ConversationsDir, 15*time.Second) {
+		return true, fmt.Errorf("检测到有对话正在运行，再次点击可强制重启")
+	}
+	r.ClearPending()
+	guard := ReadRelaunchGuard()
+	if err := r.relaunchProc(*target, "manual-pane-relaunch", guard, time.Now()); err != nil {
+		return false, fmt.Errorf("重启 Antigravity 失败：%v", err)
+	}
+	return false, nil
+}
+
+func (r *RelaunchController) relaunchProc(proc HostProc, reason string, guard RelaunchGuard, now time.Time) error {
 	r.relaunching = true
 	defer func() { r.relaunching = false }()
 	r.ignored[proc.Pid] = true
@@ -603,9 +692,9 @@ func (r *RelaunchController) relaunchProc(proc HostProc, reason string, guard Re
 	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[Daemon] Auto-relaunch error for PID %d (%s): %v\n", proc.Pid, reason, err)
-		return false
+		return err
 	}
 	fmt.Printf("[Daemon] Auto-relaunched Antigravity (%s, old PID %d, age %ss, %s) with --remote-debugging-port=0.\n",
 		proc.Channel, proc.Pid, shared.FormatJSNumber(proc.ElapsedSec), reason)
-	return true
+	return nil
 }

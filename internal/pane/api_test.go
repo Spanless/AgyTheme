@@ -171,3 +171,44 @@ func TestDirectMetricsAndSSEEndpoints(t *testing.T) {
 		t.Fatalf("GET /api/metrics/stream: %d ct=%q body=%s", rec.Code, rec.Header().Get("Content-Type"), rec.Body.String())
 	}
 }
+
+func TestRelaunchEndpointBusyAndForce(t *testing.T) {
+	calls := []bool{}
+	api := &API{
+		RootDir:   t.TempDir(),
+		PluginDir: t.TempDir(),
+		Relaunch: func(force bool) (bool, error) {
+			calls = append(calls, force)
+			if !force {
+				return true, errTestBusy
+			}
+			return false, nil
+		},
+	}
+	h := NewHandlerWithAPI(bundle.NewPanePage(bundle.EmbeddedSource()), token, api)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/relaunch", nil)
+	req.Header.Set("x-sidecar-token", token)
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), `"busy":true`) {
+		t.Fatalf("busy POST /api/relaunch: %d %s", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/relaunch", bytes.NewBufferString(`{"force":true}`))
+	req.Header.Set("x-sidecar-token", token)
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"relaunching":true`) {
+		t.Fatalf("force POST /api/relaunch: %d %s", rec.Code, rec.Body.String())
+	}
+	if len(calls) != 2 || calls[0] != false || calls[1] != true {
+		t.Fatalf("unexpected calls: %v", calls)
+	}
+}
+
+var errTestBusy = &testErr{"active conversation"}
+
+type testErr struct{ msg string }
+
+func (e *testErr) Error() string { return e.msg }
